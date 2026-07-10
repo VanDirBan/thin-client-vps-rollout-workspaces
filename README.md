@@ -7,7 +7,7 @@ The project has two connected parts:
 1. **VPS/thin-client workplace migration** — a physical laptop becomes a managed thin client that connects to a working VPS desktop.
 2. **WorkMon screenshot collection** — the worker laptop captures screenshots locally, encrypts them immediately, and the admin laptop later pulls, decrypts, and uploads them to an SMB share.
 
-This repository is currently the baseline implementation. It is expected to evolve: firewall setup, WireGuard server configuration, operational polish, and extra automation are still planned.
+This repository is currently the baseline implementation. It is expected to evolve: firewall setup, WireGuard server-side peer policy, operational polish, and extra automation are still planned.
 
 ## Current status
 
@@ -24,7 +24,7 @@ This repository is currently the baseline implementation. It is expected to evol
                  │ - XFCE + LightDM/Xorg                        │
                  │ - NoMachine server                           │
                  │ - Firefox / Telegram / Multilogin X          │
-                 │ - WireGuard tools                            │
+                 │ - WireGuard client tooling                    │
                  └───────────────────▲──────────────────────────┘
                                      │ NoMachine over LAN/WG
                                      │
@@ -103,16 +103,19 @@ It installs and configures:
 - Firefox from Mozilla's APT repository;
 - Telegram Desktop, with Flatpak fallback;
 - Multilogin X Desktop from a local `.deb` placed next to the script;
-- WireGuard tools;
+- WireGuard client tooling, keypair generation, and optional `wg0` setup;
 - users: admin user with sudo and worker user without sudo;
 - desktop shortcuts for the worker user.
 
 Important notes:
 
 - The script is idempotent where practical.
+- It supports selective canonical-order step runs, for example `sudo -E bash scripts/vps-provision.sh nomachine display` or `sudo bash scripts/vps-provision.sh --list`.
+- Existing user passwords are not reset on rerun; passwords are only applied when users are first created.
 - It handles stuck NoMachine installer/subscription processes from a previous run.
 - It verifies the downloaded NoMachine `.deb`, because the NoMachine download server may return an HTML page with HTTP 200 for a nonexistent version.
-- It does **not** create the final WireGuard server tunnel config yet.
+- It treats the VPS as a WireGuard client of an existing WG network: it always generates `/etc/wireguard/vps_private.key` and `/etc/wireguard/vps_public.key`, and writes/starts `wg0` only when `WG_SERVER_PUBKEY` and `WG_SERVER_ENDPOINT` are set.
+- The WireGuard server-side peer still has to be added outside this script.
 - It does **not** configure the firewall yet. After the first rollout, NoMachine may listen on port `4000` on the public interface until you close it manually.
 - The Multilogin `.deb` is intentionally not committed. Put it next to `scripts/vps-provision.sh` before running:
 
@@ -274,7 +277,7 @@ cp env/vps-provision.env.example .env.vps-provision
 chmod 600 .env.vps-provision
 ```
 
-Edit `.env.vps-provision` and set real initial passwords and package pins.
+Edit `.env.vps-provision` and set real initial passwords, package pins, and WireGuard values when available.
 
 Run the provisioner with environment preserved through sudo:
 
@@ -290,7 +293,7 @@ After the run:
 - reboot if `/var/run/reboot-required` exists;
 - verify LightDM/XFCE and NoMachine;
 - manually restrict public access until firewall automation is added;
-- configure WireGuard server peer(s) manually for now;
+- add the generated VPS WireGuard public key as a peer on the WG server, then fill `WG_SERVER_PUBKEY` / `WG_SERVER_ENDPOINT` and rerun `sudo -E bash scripts/vps-provision.sh wireguard`;
 - place the Multilogin X `.deb` next to the script before reruns if needed.
 
 ### 2. Prepare the admin laptop collector
@@ -505,7 +508,7 @@ Current known gap:
 
 - Firewall setup is not yet implemented in the provisioning scripts.
 - NoMachine may listen on port `4000` publicly after VPS rollout.
-- WireGuard server-side configuration is not finalized in this repository yet.
+- WireGuard server-side peer configuration is not automated in this repository yet; the VPS-side client config is supported by `scripts/vps-provision.sh` once the server details are provided.
 
 Before production use, add and verify firewall rules so that:
 
@@ -553,7 +556,7 @@ git status --short
 ## Current TODO / planned work
 
 - Add VPS firewall setup.
-- Add final WireGuard server configuration on the VPS side.
+- Add/document final WireGuard server-side peer configuration and routing policy.
 - Decide final NoMachine exposure policy and enforce it automatically.
 - Add clearer operational runbooks after real deployment testing.
 - Decide backup/retention policy for the admin-side age private key and SMB screenshot archive.
