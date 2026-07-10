@@ -6,5 +6,5 @@ Full project documentation will be written after all source files and scripts ar
 
 ## Current contents
 
-- `scripts/local-provision.sh` — local physical laptop provisioning script for the thin-client side.
-- `env/local-provision.env.example` — example environment variables for sensitive and site-specific values.
+- `scripts/local-provision.sh` — fleet-aware local physical laptop provisioning script for the thin-client side. It prepares Debian 13/XFCE, NoMachine, WireGuard, audio support, desktop shortcuting, hostname setup, and WorkMon agent installation hooks.
+- `env/local-provision.env.example` — example environment variables for per-machine values, sensitive values, and site-specific infrastructure settings.

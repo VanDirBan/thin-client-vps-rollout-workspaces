@@ -1,311 +1,425 @@
 #!/usr/bin/env bash
 #==============================================================================
-# local-provision.sh — prepares a LOCAL physical PC (Debian 13 "trixie")
-#   as a thin client for a VPS: XFCE + NoMachine (client+server) + WireGuard + audio.
-#   Machine: HP 255 G7, AMD Ryzen 5 3500U (Picasso/Vega).
+# local-provision.sh — provisioning the LOCAL PC (Debian 13 "trixie", physical machine)
+#   as a thin client to the VPS: XFCE + NoMachine (client+server) + WireGuard + audio.
 #
-# Run:   sudo bash local-provision.sh
-# Idempotent: rerunning it should not break already applied changes.
+# Machine: HP 255 G7, AMD Ryzen 5 3500U (Picasso/Vega).
 #
-# IMPORTANT: put xfce-win10.sh in the same directory as this script. It will be
-#            copied to the target user and should be applied LATER, by that user,
-#            from an active XFCE session.
+# USAGE (both parameters are REQUIRED — unique for each machine in the fleet):
+#   sudo NEW_HOSTNAME=tc-05 WG_CLIENT_ADDR=10.8.0.5/24 bash local-provision.sh
+#
+# Debugging individual steps (comma-separated list, see the STEPS array below):
+#   sudo ONLY=wireguard,watchdog WG_CLIENT_ADDR=10.8.0.5/24 bash local-provision.sh
+#
+# Idempotent: re-running does not break what's already been done.
+#
+# IMPORTANT: put xfce-win10.sh in the same folder as this script — it will be copied
+#        to the target user (apply it LATER, as the user, in an active XFCE session).
 #==============================================================================
 set -euo pipefail
 
 #------------------------------------------------------------------------------
 # CONFIG
 #------------------------------------------------------------------------------
+# --- Required per-machine parameters (passed via environment) ---
+NEW_HOSTNAME="${NEW_HOSTNAME:-}"        # unique machine name, e.g. tc-05
+WG_CLIENT_ADDR="${WG_CLIENT_ADDR:-}"    # unique address in the tunnel, e.g. 10.8.0.5/24
+                                        # WARNING: 10.8.0.2 hardcoded across the whole fleet =
+                                        # address collision, the second laptop will kick out the first.
+
 # --- Users ---
-ADMIN_USER="${ADMIN_USER:-adams}"          # existing user that receives sudo access
-SVC_USER="${SVC_USER:-smm}"                # service user to create, without sudo
-SVC_USER_PASSWORD="${SVC_USER_PASSWORD:-CHANGE_ME_ON_FIRST_RUN}"    # initial SVC_USER password; change it with: passwd "$SVC_USER"
-# Target desktop user. Defaults to the user that invoked sudo.
+ADMIN_USER="${ADMIN_USER:-adams}"          # existing user to grant sudo to
+SVC_USER="${SVC_USER:-smm}"              # service user to create, no sudo
+SVC_USER_PASSWORD="${SVC_USER_PASSWORD:-CHANGE_ME_ON_FIRST_RUN}"    # SVC_USER password on creation (weak by default — change it: passwd "$SVC_USER")
+# Target desktop user. Defaults to whoever invoked sudo.
 TARGET_USER="${TARGET_USER:-${SUDO_USER:-$(logname 2>/dev/null || echo adams)}}"
 
-# --- WorkMon agent (third-party installer located next to this script) ---
-WORKMON_AGENT_DIRNAME="${WORKMON_AGENT_DIRNAME:-workmon-agent-0.4.0}"   # directory with install.sh, searched under $SELF_DIR
+# Group for "semi-secret" files (log, WG configs/keys): not strictly root,
+# but readable by members of sudo. We do NOT touch root's authorized_keys — sshd StrictModes
+# doesn't like extra permissions on ~/.ssh.
+ADMIN_GROUP="${ADMIN_GROUP:-sudo}"
 
-# --- WireGuard (full tunnel through the VPS) ---
+# --- SSH: collector's public key (workmon-collect) for root's authorized_keys.
+#     The private part — ONLY on the admin node.
+#     Pass COLLECT_PUBKEY via the environment; do not commit real keys. ---
+COLLECT_PUBKEY="${COLLECT_PUBKEY:-}"
+
+# --- WorkMon agent (third-party installer, sits next to the script) ---
+WORKMON_AGENT_DIRNAME="${WORKMON_AGENT_DIRNAME:-workmon-agent-0.4.0}"   # directory with install.sh, looked up in $SELF_DIR
+
+# --- WireGuard (full-tunnel through the VPS) ---
 WG_IFACE="${WG_IFACE:-wg0}"
-WG_CLIENT_ADDR="${WG_CLIENT_ADDR:-10.8.0.2/24}"
 WG_SERVER_PUBKEY="${WG_SERVER_PUBKEY:-REPLACE_WITH_WG_SERVER_PUBLIC_KEY}"
 WG_ENDPOINT="${WG_ENDPOINT:-REPLACE_WITH_VPS_ENDPOINT:51820}"
 WG_ALLOWED="${WG_ALLOWED:-0.0.0.0/0, ::/0}"
 WG_KEEPALIVE="${WG_KEEPALIVE:-25}"
-# DNS through the tunnel. Uncomment it in wg0.conf below if the VPS has a resolver.
+# DNS through the tunnel (uncomment in wg0.conf below if the VPS has a resolver).
 
-# Tunnel autostart on boot + watchdog retries. "yes" = enable, "no" = only
-# prepare the units without enabling them. WARNING for full-tunnel mode: if you
-# enable this before adding the peer on the VPS, after reboot the laptop will
-# bring the tunnel up "to nowhere" and lose internet connectivity. Recovery must
-# be done at the laptop itself (see the summary).
+# Auto-start the tunnel on boot + watchdog (retries). "yes" = enable, "no" = only
+# prepare the units without enabling them. WARNING for full-tunnel: if you enable "yes" BEFORE
+# this peer has been added on the VPS, after a reboot the laptop will bring the tunnel up into "nowhere"
+# and be left without internet. Recovery requires physical access to the laptop (see summary).
 WG_AUTOSTART="${WG_AUTOSTART:-yes}"
 WG_WATCHDOG_MAX_AGE="${WG_WATCHDOG_MAX_AGE:-180}"   # seconds without a handshake => watchdog recreates the tunnel
 
-# --- NoMachine: keep the same version as on the VPS. A v9 client can connect to
-#     a v8 server, but identical versions are cleaner. Check downloads.nomachine.com (id=1).
-#     WARNING: for a non-existing file, the NoMachine server returns 200+HTML,
-#     not 404, so after download we verify that the file is a real .deb. ---
+# --- NoMachine: keep the same version as on the VPS (client v9 can talk to
+#     server v8, but matching versions are cleaner). Check here: downloads.nomachine.com (id=1).
+#     WARNING: for a nonexistent file, the NoMachine server returns 200+HTML instead of 404,
+#     so after downloading we verify it's an actual .deb. ---
 NOMACHINE_BRANCH="${NOMACHINE_BRANCH:-9.7}"
 NOMACHINE_VERSION="${NOMACHINE_VERSION:-9.7.3}"
 NOMACHINE_BUILD="${NOMACHINE_BUILD:-1}"
-NOMACHINE_MD5="${NOMACHINE_MD5:-8af5efe7b8ad3872a4681c4acf551b62}"   # empty "" = do not verify MD5
+NOMACHINE_MD5="${NOMACHINE_MD5:-8af5efe7b8ad3872a4681c4acf551b62}"   # empty "" = skip MD5 check.
+# MD5 mismatch = STOP (die): an integrity check that just "warns and moves on"
+# doesn't protect against anything. New build released — update NOMACHINE_* and MD5 deliberately.
 NOMACHINE_URL="https://download.nomachine.com/download/${NOMACHINE_BRANCH}/Linux/nomachine_${NOMACHINE_VERSION}_${NOMACHINE_BUILD}_amd64.deb"
+
+# --- Windows-10 theme (B00merang): PINNED to specific commits, not master.
+#     Otherwise fleet machines rolled out on different days would get different theme versions.
+#     Update deliberately: git ls-remote https://github.com/<repo>.git master ---
+WIN10_THEME_COMMIT="${WIN10_THEME_COMMIT:-3a4116603b66a9adcb78f3987d7ea6f01de1cbce}"   # B00merang-Project/Windows-10 (2025-08-22)
+WIN10_ICONS_COMMIT="${WIN10_ICONS_COMMIT:-9f199c6b7c6050f36d0d15aaa6e9f4847e8b9066}"   # B00merang-Artwork/Windows-10
 
 export DEBIAN_FRONTEND=noninteractive
 LOG="/var/log/local-provision.log"
-SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 #------------------------------------------------------------------------------
 # Helpers
 #------------------------------------------------------------------------------
-log()  { echo -e "\n\033[1;32m==>\033[0m $*" | tee -a "$LOG"; }
-warn() { echo -e "\033[1;33m[!]\033[0m $*" | tee -a "$LOG"; }
-die()  { echo -e "\033[1;31m[FAIL]\033[0m $*" | tee -a "$LOG"; exit 1; }
+# printf instead of echo -e: echo -e interprets backslash sequences
+# in the messages themselves (paths with \t etc. would get mangled).
+log()  { printf '\n\033[1;32m==>\033[0m %s\n' "$*" | tee -a "$LOG"; }
+warn() { printf '\033[1;33m[!]\033[0m %s\n'   "$*" | tee -a "$LOG"; }
+die()  { printf '\033[1;31m[FAIL]\033[0m %s\n' "$*" | tee -a "$LOG"; exit 1; }
 
-[ "$(id -u)" -eq 0 ] || die "Запусти от root:  sudo bash $0"
-id -u "$TARGET_USER" >/dev/null 2>&1 || die "Юзер '$TARGET_USER' не найден. Задай TARGET_USER в конфиге."
+# best-effort install: failure = warning, not a full rollout stop
+apt_try() { apt-get install -y "$@" || warn "Failed to install: $*  (skipping)"; }
+
+# Backup reference: ONE .orig file with the original state instead of a pile
+# of timestamped copies on every re-run.
+ensure_backup() { local f="$1"; [ -f "${f}.orig" ] || cp -a "$f" "${f}.orig"; }
+
+# key=value in /etc/default/grub: uncomment/replace, or append
+set_grubcfg() {
+    local key="$1" val="$2" cfg="/etc/default/grub"
+    if grep -qE "^#?${key}=" "$cfg"; then
+        sed -i -E "s|^#?${key}=.*|${key}=${val}|" "$cfg"
+    else
+        echo "${key}=${val}" >> "$cfg"
+    fi
+}
+
+# NoMachine stores defaults COMMENTED OUT (#Key 1): uncomment/set
+# an existing key, or append it if missing.
+set_nodecfg() {
+    local key="$1" val="$2" cfg="/usr/NX/etc/node.cfg"
+    if grep -qE "^#?${key}[[:space:]]" "$cfg"; then
+        sed -i -E "s|^#?${key}[[:space:]].*|${key} ${val}|" "$cfg"
+    else
+        echo "${key} ${val}" >> "$cfg"
+    fi
+}
+
+# true if the step will run in this pass (respects ONLY)
+will_run() { [ -z "${ONLY:-}" ] || [[ ",${ONLY}," == *",$1,"* ]]; }
+
+#------------------------------------------------------------------------------
+# Pre-checks
+#------------------------------------------------------------------------------
+[ "$(id -u)" -eq 0 ] || die "Run as root:  sudo bash $0"
+
+# Log: root:sudo 640 — readable by admins via sudo group membership, but not by everyone
+# (the log contains the default SVC_USER password and other rollout details).
+getent group "$ADMIN_GROUP" >/dev/null || ADMIN_GROUP="root"
+touch "$LOG"
+chown "root:${ADMIN_GROUP}" "$LOG"
+chmod 640 "$LOG"
+
+id -u "$TARGET_USER" >/dev/null 2>&1 || die "User '$TARGET_USER' not found. Set TARGET_USER in the config."
 TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
 
-trap 'die "Ошибка на строке $LINENO. Смотри $LOG"' ERR
-
-log "Целевой пользователь рабочего стола: $TARGET_USER ($TARGET_HOME)"
-
-# Best-effort installation: failure becomes a warning, not a hard rollout stop.
-apt_try() { apt-get install -y "$@" || warn "Не удалось поставить: $*  (пропускаю)"; }
-
-#==============================================================================
-# 0. SSH host keys: on this machine they sometimes get deleted, so restore them
-#    first, before apt full-upgrade (see the ordering warning below).
-#==============================================================================
-log "SSH host keys: ssh-keygen -A (создаёт только ОТСУТСТВУЮЩИЕ, существующие не трогает)"
-if command -v ssh-keygen >/dev/null 2>&1; then
-    ssh-keygen -A
-    if systemctl list-unit-files ssh.service >/dev/null 2>&1; then
-        systemctl restart ssh
-        log "ssh.service перезапущен"
-    elif systemctl list-unit-files sshd.service >/dev/null 2>&1; then
-        systemctl restart sshd
-        log "sshd.service перезапущен"
-    else
-        warn "Юнит ssh/sshd не найден (openssh-server не установлен?) — сервис не перезапущен"
-    fi
-else
-    warn "ssh-keygen не найден в PATH — openssh-client/server не установлен, пропускаю"
+# Required parameters are checked only if the corresponding step will actually run
+if will_run hostname; then
+    [ -n "$NEW_HOSTNAME" ] || die "NEW_HOSTNAME not set. Example: sudo NEW_HOSTNAME=tc-05 WG_CLIENT_ADDR=10.8.0.5/24 bash $0"
+    [[ "$NEW_HOSTNAME" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || die "NEW_HOSTNAME '$NEW_HOSTNAME' is invalid (a-z, 0-9, hyphens; no dots/spaces)"
 fi
-#==============================================================================
-# 0.0.1 SSH: public collector key (workmon-collect) in root's authorized_keys.
-#    Required so the admin node can fetch .age files over SSH without a password
-#    (BatchMode=yes).
-#    Idempotent: rerunning does NOT create duplicates.
-#==============================================================================
-# Collector public key. The private part must exist ONLY on the admin node.
-# Prefer passing this through the environment instead of committing it here.
-COLLECT_PUBKEY="${COLLECT_PUBKEY:-}"
+if will_run wireguard; then
+    [ -n "$WG_CLIENT_ADDR" ] || die "WG_CLIENT_ADDR not set (must be unique per machine!). Example: sudo NEW_HOSTNAME=tc-05 WG_CLIENT_ADDR=10.8.0.5/24 bash $0"
+    [[ "$WG_CLIENT_ADDR" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$ ]] || die "WG_CLIENT_ADDR '$WG_CLIENT_ADDR' doesn't look like CIDR (expected something like 10.8.0.5/24)"
+fi
 
-key_body=$(awk '{print $2}' <<<"$COLLECT_PUBKEY")
-if [[ -z "$key_body" ]]; then
-    warn "COLLECT_PUBKEY пуст или не похож на ключ — пропускаю authorized_keys"
-else
-    auth_keys=/root/.ssh/authorized_keys
+trap 'die "Error at line $LINENO. Check $LOG"' ERR
+
+log "Target desktop user: $TARGET_USER ($TARGET_HOME)"
+
+#==============================================================================
+# STEP hostname — unique machine name (required parameter)
+#==============================================================================
+step_hostname() {
+    local cur; cur="$(cat /etc/hostname 2>/dev/null || hostname)"
+    if [ "$cur" = "$NEW_HOSTNAME" ]; then
+        log "hostname is already '$NEW_HOSTNAME' — skipping"
+        return 0
+    fi
+    log "hostname: '$cur' -> '$NEW_HOSTNAME'"
+    hostnamectl set-hostname "$NEW_HOSTNAME"
+    # /etc/hosts: update/add 127.0.1.1, otherwise sudo/X will complain about resolving
+    if grep -qE '^127\.0\.1\.1[[:space:]]' /etc/hosts; then
+        sed -i -E "s|^127\.0\.1\.1[[:space:]].*|127.0.1.1\t${NEW_HOSTNAME}|" /etc/hosts
+    else
+        printf '127.0.1.1\t%s\n' "$NEW_HOSTNAME" >> /etc/hosts
+    fi
+}
+
+#==============================================================================
+# STEP ssh_hostkeys — on this machine they somehow get wiped; restore them
+#   first thing, before apt full-upgrade.
+#==============================================================================
+step_ssh_hostkeys() {
+    log "SSH host keys: ssh-keygen -A (creates only the MISSING ones, leaves existing untouched)"
+    if ! command -v ssh-keygen >/dev/null 2>&1; then
+        warn "ssh-keygen not found in PATH — openssh-client/server not installed, skipping"
+        return 0
+    fi
+    ssh-keygen -A
+    # list-unit-files exit codes changed between systemd versions — just try both units
+    if systemctl restart ssh 2>/dev/null; then
+        log "ssh.service restarted"
+    elif systemctl restart sshd 2>/dev/null; then
+        log "sshd.service restarted"
+    else
+        warn "ssh/sshd unit not found (openssh-server not installed?) — service not restarted"
+    fi
+}
+
+#==============================================================================
+# STEP collect_key — collector's public key (workmon-collect) into root's authorized_keys.
+#   Needed so the admin node can pull .age files over SSH without a password (BatchMode=yes).
+#   Idempotent: re-running does NOT create duplicates.
+#   /root/.ssh deliberately stays strictly root (700/600): sshd StrictModes
+#   rejects keys if the directory has "extra" permissions.
+#==============================================================================
+step_collect_key() {
+    local key_body auth_keys=/root/.ssh/authorized_keys
+    key_body=$(awk '{print $2}' <<<"$COLLECT_PUBKEY")
+    if [[ -z "$key_body" ]]; then
+        warn "COLLECT_PUBKEY is empty or doesn't look like a key — skipping authorized_keys"
+        return 0
+    fi
     install -d -m 700 -o root -g root /root/.ssh
     touch "$auth_keys"
     chown root:root "$auth_keys"
     chmod 600 "$auth_keys"
 
-    # Compare by the base64 key body (the 2nd field), not by the whole line:
-    # a different trailing comment will not create a duplicate. -F means fixed
-    # string search: keys contain + and /, which would otherwise be treated as regex.
+    # Compare by the key's base64 body (2nd field), not the whole line: a different
+    # trailing comment won't create a duplicate. -F — fixed string (the key contains
+    # + and /, without -F these would be treated as regex).
     if grep -qF "$key_body" "$auth_keys"; then
-        log "authorized_keys: ключ сборщика уже установлен, пропускаю"
+        log "authorized_keys: collector key already installed, skipping"
     else
-        # If the file does not end with a newline, add one to avoid joining lines.
+        # if the file doesn't end with a newline — add one, to avoid gluing lines together
         [[ -s "$auth_keys" && -n "$(tail -c1 "$auth_keys")" ]] && printf '\n' >> "$auth_keys"
         printf '%s\n' "$COLLECT_PUBKEY" >> "$auth_keys"
-        log "authorized_keys: ключ сборщика добавлен"
+        log "authorized_keys: collector key added"
     fi
-fi
-#==============================================================================
-# 0.1 Users: sudo for adams, service user smm without sudo
-#==============================================================================
-log "sudo-пакет + права для $ADMIN_USER"
-apt-get install -y sudo
-if id -u "$ADMIN_USER" >/dev/null 2>&1; then
-    usermod -aG sudo "$ADMIN_USER"
-    log "$ADMIN_USER добавлен в группу sudo"
-else
-    warn "Пользователь $ADMIN_USER не найден — sudo не выдан"
-fi
-
-log "Служебный пользователь $SVC_USER (без sudo)"
-if ! id -u "$SVC_USER" >/dev/null 2>&1; then
-    useradd -m -s /bin/bash "$SVC_USER"
-    echo "${SVC_USER}:${SVC_USER_PASSWORD}" | chpasswd
-    log "$SVC_USER создан, пароль задан из SVC_USER_PASSWORD"
-else
-    log "$SVC_USER уже существует — пропускаю создание и пароль (чтобы не затирать сменённый пароль при реране)"
-fi
-warn "Пароль $SVC_USER задан через SVC_USER_PASSWORD — это дефолт до первой смены: passwd $SVC_USER"
+}
 
 #==============================================================================
-# 0.2 GRUB: no boot delay and no boot menu
+# STEP users — sudo for adams, service user smm without sudo
 #==============================================================================
-log "GRUB: TIMEOUT=0, TIMEOUT_STYLE=hidden, RECORDFAIL_TIMEOUT=0"
-GRUB_CFG="/etc/default/grub"
-cp -a "$GRUB_CFG" "${GRUB_CFG}.bak.$(date +%s)"
-set_grubcfg() {
-    local key="$1" val="$2"
-    if grep -qE "^#?${key}=" "$GRUB_CFG"; then
-        sed -i -E "s|^#?${key}=.*|${key}=${val}|" "$GRUB_CFG"
+step_users() {
+    log "sudo package + privileges for $ADMIN_USER"
+    apt-get install -y sudo
+    if id -u "$ADMIN_USER" >/dev/null 2>&1; then
+        usermod -aG sudo "$ADMIN_USER"
+        log "$ADMIN_USER added to the sudo group"
     else
-        echo "${key}=${val}" >> "$GRUB_CFG"
+        warn "User $ADMIN_USER not found — sudo not granted"
     fi
+
+    log "Service user $SVC_USER (no sudo)"
+    if ! id -u "$SVC_USER" >/dev/null 2>&1; then
+        useradd -m -s /bin/bash "$SVC_USER"
+        echo "${SVC_USER}:${SVC_USER_PASSWORD}" | chpasswd
+        log "$SVC_USER created"
+    else
+        log "$SVC_USER already exists — skipping creation and password (so a rerun doesn't overwrite a changed password)"
+    fi
+    # Note for the admin doing the rollout; the log is now 640 root:sudo, not exposed to others.
+    warn "$SVC_USER password = '$SVC_USER_PASSWORD' — weak, this is the default until first changed: passwd $SVC_USER"
 }
-set_grubcfg GRUB_TIMEOUT 0
-set_grubcfg GRUB_TIMEOUT_STYLE hidden
-set_grubcfg GRUB_RECORDFAIL_TIMEOUT 0
-update-grub
-log "GRUB обновлён (бэкап рядом с $GRUB_CFG)"
 
 #==============================================================================
-# 1. APT components: contrib / non-free / non-free-firmware
-#    On physical hardware, microcode and proprietary firmware (Wi-Fi) will not
-#    arrive without these components.
+# STEP grub — no pause or menu at boot
 #==============================================================================
-log "Включаю contrib / non-free / non-free-firmware"
-DEB822="/etc/apt/sources.list.d/debian.sources"
-if [ -f "$DEB822" ]; then
-    # deb822 format (default in trixie): append missing components to each section.
-    for comp in contrib non-free non-free-firmware; do
-        awk -v c="$comp" '
+step_grub() {
+    log "GRUB: TIMEOUT=0, TIMEOUT_STYLE=hidden, RECORDFAIL_TIMEOUT=0"
+    ensure_backup /etc/default/grub
+    set_grubcfg GRUB_TIMEOUT 0
+    set_grubcfg GRUB_TIMEOUT_STYLE hidden
+    set_grubcfg GRUB_RECORDFAIL_TIMEOUT 0
+    update-grub
+    log "GRUB updated (reference: /etc/default/grub.orig)"
+}
+
+#==============================================================================
+# STEP apt_sources — contrib / non-free / non-free-firmware
+#   Without this, microcode and proprietary firmware (Wi-Fi) won't arrive on physical hardware.
+#==============================================================================
+step_apt_sources() {
+    log "Enabling contrib / non-free / non-free-firmware"
+    local DEB822="/etc/apt/sources.list.d/debian.sources"
+    if [ -f "$DEB822" ]; then
+        # deb822 format (default in trixie): one awk pass appends ALL
+        # missing components to every Components: section:
+        awk '
             /^Components:/ {
-                n=split($0,a," "); has=0
-                for(i=2;i<=n;i++) if(a[i]==c) has=1
-                if(!has) $0=$0" "c
+                split("contrib non-free non-free-firmware", w, " ")
+                for (j in w) need[w[j]] = 1
+                for (i = 2; i <= NF; i++) if ($i in need) delete need[$i]
+                for (c in need) { $0 = $0 " " c; delete need[c] }
             }
-            {print}
+            { print }
         ' "$DEB822" > "$DEB822.tmp" && mv "$DEB822.tmp" "$DEB822"
-    done
-else
-    # Classic sources.list format.
-    if ! grep -qE '^deb .*non-free-firmware' /etc/apt/sources.list 2>/dev/null; then
-        warn "deb822 не найден — добавляю компоненты в /etc/apt/sources.list вручную, проверь результат"
-        sed -i -E 's/^(deb .*trixie[^ ]* main)(.*)$/\1 contrib non-free non-free-firmware\2/' /etc/apt/sources.list || true
+    else
+        # classic sources.list
+        if ! grep -qE '^deb .*non-free-firmware' /etc/apt/sources.list 2>/dev/null; then
+            warn "deb822 not found — adding components to /etc/apt/sources.list manually, check the result"
+            sed -i -E 's/^(deb .*trixie[^ ]* main)(.*)$/\1 contrib non-free non-free-firmware\2/' /etc/apt/sources.list || true
+        fi
     fi
-fi
-
-#==============================================================================
-# 2. System update + firmware/microcode + kernel headers
-#==============================================================================
-log "Обновление системы"
-apt-get update -y
-apt-get full-upgrade -y --allow-downgrades
-
-log "Прошивки, микрокод AMD, заголовки ядра, базовые утилиты"
-apt-get install -y \
-    amd64-microcode \
-    firmware-linux-free firmware-misc-nonfree \
-    firmware-amd-graphics firmware-realtek \
-    linux-headers-amd64 dkms \
-    curl wget gnupg ca-certificates apt-transport-https unzip htop
-
-log "Сеть: NetworkManager (для Wi-Fi на ноуте + апплет в трее)"
-apt-get install -y network-manager network-manager-gnome
-
-#==============================================================================
-# 3. XFCE + display manager (manual login) + fonts + themes for the Win10 look
-#==============================================================================
-log "XFCE (ядро десктопа)"
-apt-get install -y xfce4 xfconf dbus-x11 dbus-user-session x11-xserver-utils
-
-log "Обязательное для облика Windows-10"
-apt-get install -y xfce4-whiskermenu-plugin      # Start button
-apt-get install -y gtk2-engines-murrine          # renders the GTK2 part of the B00merang theme
-apt-get install -y gvfs gvfs-daemons             # Trash/removable media on the desktop
-apt-get install -y fonts-noto fonts-noto-color-emoji fonts-liberation
-
-log "Обязательные пакеты для облика Windows-10"
-apt-get install -y xfce4-whiskermenu-plugin gtk2-engines-murrine \
-                   gvfs gvfs-daemons xfconf curl unzip
-
-
-log "Тема Windows-10 (B00merang) в системные каталоги"
-_install_win10_look() {
-  local tmp; tmp="$(mktemp -d)"; local ok=1
-  # GTK + xfwm4 theme -> /usr/share/themes/Windows-10 (specifically without -master).
-  if [ ! -d /usr/share/themes/Windows-10 ]; then
-    if curl -fsSL -o "$tmp/theme.zip" \
-         https://codeload.github.com/B00merang-Project/Windows-10/zip/refs/heads/master \
-       && unzip -q "$tmp/theme.zip" -d "$tmp/t"; then
-      rm -rf /usr/share/themes/Windows-10
-      mv "$tmp/t/Windows-10-master" /usr/share/themes/Windows-10
-    else ok=0; fi
-  fi
-  # Icons -> /usr/share/icons/Windows-10.
-  if [ ! -d /usr/share/icons/Windows-10 ]; then
-    if curl -fsSL -o "$tmp/icons.zip" \
-         https://codeload.github.com/B00merang-Artwork/Windows-10/zip/refs/heads/master \
-       && unzip -q "$tmp/icons.zip" -d "$tmp/i"; then
-      rm -rf /usr/share/icons/Windows-10
-      mv "$tmp/i/Windows-10-master" /usr/share/icons/Windows-10
-      gtk-update-icon-cache -f /usr/share/icons/Windows-10 2>/dev/null || true
-    else ok=0; fi
-  fi
-  rm -rf "$tmp"
-  [ "$ok" -eq 1 ] || log "[!] Тему Windows-10 не скачал — клиенты откатятся на Arc/Papirus"
 }
-_install_win10_look
-
-log "Фолбэк-темы"
-apt_try arc-theme papirus-icon-theme
-
-log "Десктоп-экстры (best-effort)"
-apt_try xfce4-goodies
-apt_try pipewire pipewire-pulse wireplumber
-apt_try xfce4-screensaver                        # only needed if Win+L must really lock the session
-
-
-# Force lightdm as the default DM without an interactive dialog.
-echo "/usr/sbin/lightdm" > /etc/X11/default-display-manager
-systemctl enable lightdm >/dev/null 2>&1 || true
-# The Bibata cursor is optional in xfce-win10.sh: if it is not installed, it simply
-# will not be applied. Alternatively, comment out CursorThemeName in xfce-win10.sh.
 
 #==============================================================================
-# 4. Audio: PipeWire + pulse shim + client utilities required by the .md procedure
+# STEP upgrade — system update + firmware/microcode + kernel headers + networking
 #==============================================================================
-log "PipeWire + pipewire-pulse + утилиты pactl/paplay/parecord + pavucontrol"
-apt-get install -y \
-    pipewire pipewire-pulse pipewire-audio wireplumber \
-    pulseaudio-utils pavucontrol
-usermod -aG audio,video "$TARGET_USER"
-# Load the tunnel modules manually according to your .md AFTER WG is up.
+step_upgrade() {
+    log "System update"
+    apt-get update
+    apt-get full-upgrade -y --allow-downgrades
+
+    log "Firmware, AMD microcode, kernel headers, base utilities"
+    apt-get install -y \
+        amd64-microcode \
+        firmware-linux-free firmware-misc-nonfree \
+        firmware-amd-graphics firmware-realtek \
+        linux-headers-amd64 dkms \
+        curl wget gnupg ca-certificates apt-transport-https unzip htop
+
+    log "Networking: NetworkManager (for Wi-Fi on the laptop + tray applet)"
+    apt-get install -y network-manager network-manager-gnome
+}
 
 #==============================================================================
-# 5. WireGuard: install + client key pair + wg0.conf (do NOT bring it up here)
+# STEP desktop — XFCE + display manager (manual login) + fonts + win10 look
 #==============================================================================
-log "WireGuard: установка и генерация клиентского ключа"
-apt-get install -y wireguard wireguard-tools
-( umask 077
-  mkdir -p /etc/wireguard
-  if [ ! -f /etc/wireguard/client_private.key ]; then
-      wg genkey | tee /etc/wireguard/client_private.key | wg pubkey > /etc/wireguard/client_public.key
-      log "Клиентская пара ключей сгенерирована"
-  else
-      log "Клиентский ключ уже есть — переиспользую"
-  fi
-)
-CLIENT_PRIV="$(cat /etc/wireguard/client_private.key)"
-CLIENT_PUB="$(cat /etc/wireguard/client_public.key)"
+install_win10_look() {
+    local tmp ok=1
+    tmp="$(mktemp -d)"
+    # GTK + xfwm4 theme → /usr/share/themes/Windows-10 (WITHOUT a suffix, exactly).
+    # Download the PINNED commit: codeload unpacks it as Windows-10-<sha>.
+    if [ ! -d /usr/share/themes/Windows-10 ]; then
+        if curl -fsSL -o "$tmp/theme.zip" \
+             "https://codeload.github.com/B00merang-Project/Windows-10/zip/${WIN10_THEME_COMMIT}" \
+           && unzip -q "$tmp/theme.zip" -d "$tmp/t"; then
+            rm -rf /usr/share/themes/Windows-10
+            mv "$tmp/t/Windows-10-${WIN10_THEME_COMMIT}" /usr/share/themes/Windows-10
+        else ok=0; fi
+    fi
+    # Icons → /usr/share/icons/Windows-10
+    if [ ! -d /usr/share/icons/Windows-10 ]; then
+        if curl -fsSL -o "$tmp/icons.zip" \
+             "https://codeload.github.com/B00merang-Artwork/Windows-10/zip/${WIN10_ICONS_COMMIT}" \
+           && unzip -q "$tmp/icons.zip" -d "$tmp/i"; then
+            rm -rf /usr/share/icons/Windows-10
+            mv "$tmp/i/Windows-10-${WIN10_ICONS_COMMIT}" /usr/share/icons/Windows-10
+            gtk-update-icon-cache -f /usr/share/icons/Windows-10 2>/dev/null || true
+        else ok=0; fi
+    fi
+    rm -rf "$tmp"
+    [ "$ok" -eq 1 ] || warn "Failed to download the Windows-10 theme — clients will fall back to Arc/Papirus"
+}
 
-# Rebuild the config on every run (idempotent).
-cat > "/etc/wireguard/${WG_IFACE}.conf" <<EOF
+step_desktop() {
+    log "XFCE (desktop core)"
+    apt-get install -y xfce4 xfconf dbus-x11 dbus-user-session x11-xserver-utils
+
+    log "Required packages for the Windows-10 look"
+    apt-get install -y \
+        xfce4-whiskermenu-plugin \
+        gtk2-engines-murrine \
+        gvfs gvfs-daemons \
+        fonts-noto fonts-noto-color-emoji fonts-liberation \
+        curl unzip
+        # whiskermenu — the "Start" button; murrine — renders the GTK2 part of the
+        # B00merang theme; gvfs — Trash/removable media on the desktop.
+
+    log "Windows-10 theme (B00merang, pinned to a commit) into system directories"
+    install_win10_look
+
+    log "Fallback themes"
+    apt_try arc-theme papirus-icon-theme
+
+    log "Desktop extras (best-effort)"
+    apt_try xfce4-goodies
+    apt_try xfce4-screensaver                        # only if Win+L actually needs to lock the screen
+
+    # Force lightdm as the default DM (no interactive dialog)
+    echo "/usr/sbin/lightdm" > /etc/X11/default-display-manager
+    systemctl enable lightdm >/dev/null 2>&1 || true
+    # The Bibata cursor in xfce-win10.sh is optional: if not installed, it just won't
+    # apply — or comment out the CursorThemeName line in xfce-win10.sh itself.
+}
+
+#==============================================================================
+# STEP audio — PipeWire + pulse-shim + client utilities (needed for the .md procedure)
+#==============================================================================
+step_audio() {
+    log "PipeWire + pipewire-pulse + pactl/paplay/parecord utilities + pavucontrol"
+    apt-get install -y \
+        pipewire pipewire-pulse pipewire-audio wireplumber \
+        pulseaudio-utils pavucontrol
+    # Audio is needed specifically by SVC_USER — it runs the XFCE session and drives the audio tunnel.
+    if id -u "$SVC_USER" >/dev/null 2>&1; then
+        usermod -aG audio,video "$SVC_USER"
+        log "$SVC_USER added to the audio,video groups"
+    else
+        warn "$SVC_USER not found — audio,video groups not granted"
+    fi
+    # The tunnel modules themselves are loaded manually per your .md, AFTER bringing up WG.
+}
+
+#==============================================================================
+# STEP wireguard — install + client keypair + wg0.conf (do NOT bring it up!)
+#==============================================================================
+step_wireguard() {
+    log "WireGuard: installation and client key generation"
+    apt-get install -y wireguard wireguard-tools
+
+    # Directory and files: root:sudo, group-readable — the admin can read without su.
+    install -d -m 750 -o root -g "$ADMIN_GROUP" /etc/wireguard
+    if [ ! -f /etc/wireguard/client_private.key ]; then
+        ( umask 027
+          wg genkey | tee /etc/wireguard/client_private.key | wg pubkey > /etc/wireguard/client_public.key )
+        chown "root:${ADMIN_GROUP}" /etc/wireguard/client_private.key /etc/wireguard/client_public.key
+        log "Client keypair generated"
+    else
+        log "Client key already exists — reusing"
+    fi
+    local client_priv
+    client_priv="$(cat /etc/wireguard/client_private.key)"
+
+    # Rebuild the config on every run (idempotent). IMPORTANT: set permissions
+    # BEFORE writing PrivateKey — install creates an empty file with the right mode,
+    # cat > only fills it in. No window where the key sits at 644.
+    install -m 640 -o root -g "$ADMIN_GROUP" /dev/null "/etc/wireguard/${WG_IFACE}.conf"
+    cat > "/etc/wireguard/${WG_IFACE}.conf" <<EOF
 [Interface]
-PrivateKey = ${CLIENT_PRIV}
+PrivateKey = ${client_priv}
 Address = ${WG_CLIENT_ADDR}
-# DNS = 10.8.0.1   # uncomment if the VPS has DNS and you want resolution through the tunnel
-                   # (full tunnel => otherwise DNS may leak outside the VPS; requires openresolv/systemd-resolved)
+# DNS = 10.8.0.1   # uncomment if the VPS has a DNS resolver and you want resolution through the tunnel
+                   # (full-tunnel => otherwise DNS may "leak" around the VPS; requires openresolv/systemd-resolved)
 
 [Peer]
 PublicKey = ${WG_SERVER_PUBKEY}
@@ -313,39 +427,41 @@ Endpoint = ${WG_ENDPOINT}
 AllowedIPs = ${WG_ALLOWED}
 PersistentKeepalive = ${WG_KEEPALIVE}
 EOF
-chmod 600 "/etc/wireguard/${WG_IFACE}.conf"
-log "Записан /etc/wireguard/${WG_IFACE}.conf (туннель НЕ поднимаю в этом прогоне)"
+    log "Wrote /etc/wireguard/${WG_IFACE}.conf, Address=${WG_CLIENT_ADDR} (NOT bringing up the tunnel in this run)"
+}
 
-#--- 5.1 Watchdog + autostart --------------------------------------------------
-# WireGuard retries handshakes by itself (PersistentKeepalive is set), but that
-# does not cover:
-#   - boot race: network is not ready, wg-quick@ fails and does not retry;
-#   - resume from suspend: tunnel is "stuck" with an old handshake;
-#   - server temporarily unavailable during boot.
-# Every 30s the watchdog checks the AGE of the last handshake and recreates the
-# tunnel if it is stale. In full-tunnel mode this is more reliable than ping
-# because ping will not pass through a dead tunnel anyway.
-log "Watchdog WireGuard (скрипт + systemd timer)"
-cat > /usr/local/sbin/wg-watchdog.sh <<EOF
+#==============================================================================
+# STEP watchdog — WG auto-start + recreating a stale tunnel
+#   WireGuard retries the handshake itself (there's PersistentKeepalive), but it doesn't cover:
+#     - the boot race (network not ready, wg-quick@ failed and didn't retry),
+#     - waking from suspend (the tunnel is "stuck" with a stale handshake),
+#     - the server being temporarily unreachable at startup.
+#   Every 30s the watchdog checks the AGE of the last handshake and recreates the tunnel
+#   if it's stale. On full-tunnel this is more reliable than ping (ping doesn't get through
+#   a dead tunnel anyway).
+#==============================================================================
+step_watchdog() {
+    log "WireGuard watchdog (script + systemd timer)"
+    # The script is entirely static (quoted heredoc, single piece); parameters
+    # come in via Environment= from the unit — configuration lives where it belongs.
+    cat > /usr/local/sbin/wg-watchdog.sh <<'EOF'
 #!/usr/bin/env bash
 set -u
-IFACE="${WG_IFACE}"
-MAX_AGE=${WG_WATCHDOG_MAX_AGE}
-EOF
-cat >> /usr/local/sbin/wg-watchdog.sh <<'EOF'
+IFACE="${WG_IFACE:-wg0}"
+MAX_AGE="${WG_MAX_AGE:-180}"
 log() { logger -t wg-watchdog "$*"; }
 
-# 1) Interface is missing: bring it up (boot race / after manual shutdown).
+# 1) interface doesn't exist — bring it up (boot race / after shutdown)
 if ! wg show "$IFACE" >/dev/null 2>&1; then
-    if wg-quick up "$IFACE" 2>/dev/null; then log "interface was down — up"; else log "up failed (сервер недоступен?)"; fi
+    if wg-quick up "$IFACE" 2>/dev/null; then log "interface was down — up"; else log "up failed (server unreachable?)"; fi
     exit 0
 fi
 
-# 2) Newest handshake among peers.
+# 2) most recent handshake among peers
 last="$(wg show "$IFACE" latest-handshakes 2>/dev/null | awk '{print $2}' | sort -n | tail -1)"
 [ -z "$last" ] && last=0
 
-# No handshake yet: WG will keep retrying via keepalive, do not flap the tunnel.
+# no handshake yet at all — WG retries on its own via keepalive, don't touch it
 [ "$last" -eq 0 ] && exit 0
 
 age=$(( $(date +%s) - last ))
@@ -356,9 +472,9 @@ if [ "$age" -gt "$MAX_AGE" ]; then
 fi
 exit 0
 EOF
-chmod +x /usr/local/sbin/wg-watchdog.sh
+    chmod +x /usr/local/sbin/wg-watchdog.sh
 
-cat > /etc/systemd/system/wg-watchdog.service <<EOF
+    cat > /etc/systemd/system/wg-watchdog.service <<EOF
 [Unit]
 Description=WireGuard watchdog (reconnect ${WG_IFACE})
 After=network-online.target
@@ -366,10 +482,11 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+Environment=WG_IFACE=${WG_IFACE} WG_MAX_AGE=${WG_WATCHDOG_MAX_AGE}
 ExecStart=/usr/local/sbin/wg-watchdog.sh
 EOF
 
-cat > /etc/systemd/system/wg-watchdog.timer <<EOF
+    cat > /etc/systemd/system/wg-watchdog.timer <<'EOF'
 [Unit]
 Description=Run WireGuard watchdog periodically
 
@@ -382,196 +499,256 @@ AccuracySec=5s
 WantedBy=timers.target
 EOF
 
-systemctl daemon-reload
-if [ "$WG_AUTOSTART" = "yes" ]; then
-    systemctl enable "wg-quick@${WG_IFACE}.service" >/dev/null 2>&1 || warn "не удалось enable wg-quick@${WG_IFACE}"
-    systemctl enable wg-watchdog.timer            >/dev/null 2>&1 || warn "не удалось enable wg-watchdog.timer"
-    log "Автозапуск ВКЛЮЧЁН: wg-quick@${WG_IFACE} (boot) + wg-watchdog.timer (ретраи каждые 30с)"
-    warn "Туннель сработает после ребута. Сначала добавь peer на VPS (иначе full-tunnel в никуда)."
-else
-    log "Автозапуск НЕ включён (WG_AUTOSTART=no). Юниты установлены, но disabled."
-fi
-# Do not touch the current session: bring the tunnel up manually when ready (see summary).
+    systemctl daemon-reload
+    if [ "$WG_AUTOSTART" = "yes" ]; then
+        systemctl enable "wg-quick@${WG_IFACE}.service" >/dev/null 2>&1 || warn "failed to enable wg-quick@${WG_IFACE}"
+        systemctl enable wg-watchdog.timer            >/dev/null 2>&1 || warn "failed to enable wg-watchdog.timer"
+        log "Auto-start ENABLED: wg-quick@${WG_IFACE} (boot) + wg-watchdog.timer (retries every 30s)"
+        warn "The tunnel will kick in after a reboot. Add the peer on the VPS first (otherwise full-tunnel goes nowhere)."
+    else
+        log "Auto-start NOT enabled (WG_AUTOSTART=no). Units installed but disabled."
+    fi
+    # Not touching the current session: bring the tunnel up manually when you're ready (see summary).
+}
 
 #==============================================================================
-# 6. NoMachine — full package (client + server: this machine can be connected to)
+# STEP nomachine — full package (client + server: this machine can also be
+#   connected TO) + node.cfg configuration
 #==============================================================================
-log "NoMachine ${NOMACHINE_VERSION} (полный: клиент + сервер)"
-if ! dpkg -s nomachine >/dev/null 2>&1; then
-    TMP_DEB="$(mktemp --suffix=.deb)"
-    curl -L -f -A "Mozilla/5.0" -o "$TMP_DEB" "$NOMACHINE_URL" \
-        || die "curl не смог скачать NoMachine: $NOMACHINE_URL"
-    # For a missing file, NoMachine returns 200+HTML; catch that here.
-    if ! dpkg-deb --info "$TMP_DEB" >/dev/null 2>&1; then
-        warn "Скачанный файл — НЕ валидный .deb. Первые байты:"
-        head -c 80 "$TMP_DEB" | tr -d '\0' | tee -a "$LOG" || true
-        rm -f "$TMP_DEB"
-        die "Похоже, версии ${NOMACHINE_VERSION}_${NOMACHINE_BUILD} нет на сервере. Сверь на downloads.nomachine.com (id=1) и поправь NOMACHINE_* в конфиге."
-    fi
-    if [ -n "$NOMACHINE_MD5" ]; then
-        got="$(md5sum "$TMP_DEB" | awk '{print $1}')"
-        [ "$got" = "$NOMACHINE_MD5" ] || warn "MD5 не совпал (ждал $NOMACHINE_MD5, получил $got). Возможно, вышел новый билд — продолжаю."
-    fi
-    apt-get install -y "$TMP_DEB"
-    rm -f "$TMP_DEB"
-else
-    log "NoMachine уже установлен — пропускаю"
-fi
-# --- node.cfg setup: XFCE session + quiet client mode --------------------------
-# NoMachine stores defaults COMMENTED OUT (#Key 1). The helper uncomment/sets an
-# existing key or appends it if missing. One backup and one restart for all edits.
-NODE_CFG="/usr/NX/etc/node.cfg"
-set_nodecfg() {
-    local key="$1" val="$2"
-    if grep -qE "^#?${key}[[:space:]]" "$NODE_CFG"; then
-        sed -i -E "s|^#?${key}[[:space:]].*|${key} ${val}|" "$NODE_CFG"
+step_nomachine() {
+    log "NoMachine ${NOMACHINE_VERSION} (full: client + server)"
+    if ! dpkg -s nomachine >/dev/null 2>&1; then
+        local tmp_deb got
+        tmp_deb="$(mktemp --suffix=.deb)"
+        curl -L -f -A "Mozilla/5.0" -o "$tmp_deb" "$NOMACHINE_URL" \
+            || die "curl failed to download NoMachine: $NOMACHINE_URL"
+        # NoMachine returns 200+HTML for a nonexistent file — catching that here.
+        if ! dpkg-deb --info "$tmp_deb" >/dev/null 2>&1; then
+            warn "The downloaded file is NOT a valid .deb. First bytes:"
+            head -c 80 "$tmp_deb" | tr -d '\0' | tee -a "$LOG" || true
+            rm -f "$tmp_deb"
+            die "Looks like version ${NOMACHINE_VERSION}_${NOMACHINE_BUILD} isn't available on the server. Check downloads.nomachine.com (id=1) and fix NOMACHINE_* in the config."
+        fi
+        if [ -n "$NOMACHINE_MD5" ]; then
+            got="$(md5sum "$tmp_deb" | awk '{print $1}')"
+            if [ "$got" != "$NOMACHINE_MD5" ]; then
+                rm -f "$tmp_deb"
+                die "MD5 mismatch (expected $NOMACHINE_MD5, got $got). New build released? Check the version and MD5 on downloads.nomachine.com and update NOMACHINE_* in the config."
+            fi
+        fi
+        apt-get install -y "$tmp_deb"
+        rm -f "$tmp_deb"
     else
-        echo "${key} ${val}" >> "$NODE_CFG"
+        log "NoMachine already installed — skipping"
+    fi
+
+    # --- node.cfg: XFCE session + quiet mode. One backup and one restart for all edits.
+    local NODE_CFG="/usr/NX/etc/node.cfg"
+    if [ -f "$NODE_CFG" ]; then
+        ensure_backup "$NODE_CFG"
+        # XFCE as the session — otherwise a gray screen on an INCOMING connection to this machine.
+        set_nodecfg DefaultDesktopCommand '"/usr/bin/startxfce4"'
+        # Quiet client: remove the on-screen banner "desktop is being viewed"...
+        set_nodecfg ShowDesktopViewed 0
+        # ...and the sound alert on connect.
+        set_nodecfg EnableSoundAlert 0
+        /usr/NX/bin/nxserver --restart >/dev/null 2>&1 || warn "Failed to restart nxserver"
+        log "node.cfg: DefaultDesktopCommand=startxfce4, ShowDesktopViewed=0, EnableSoundAlert=0 (reference: node.cfg.orig)"
+    else
+        warn "node.cfg not found — NoMachine not installed? Skipping configuration."
     fi
 }
-if [ -f "$NODE_CFG" ]; then
-    cp -a "$NODE_CFG" "${NODE_CFG}.bak.$(date +%s)"
-    # Use XFCE as the session; otherwise incoming connections to this machine get a gray screen.
-    set_nodecfg DefaultDesktopCommand '"/usr/bin/startxfce4"'
-    # Quiet client: remove the on-screen "desktop is being viewed" banner...
-    set_nodecfg ShowDesktopViewed 0
-    # ...and the sound alert on connection.
-    set_nodecfg EnableSoundAlert 0
-    /usr/NX/bin/nxserver --restart >/dev/null 2>&1 || warn "Не удалось перезапустить nxserver"
-    log "node.cfg: DefaultDesktopCommand=startxfce4, ShowDesktopViewed=0, EnableSoundAlert=0 (бэкап рядом)"
-else
-    warn "node.cfg не найден — NoMachine не установлен? Пропускаю настройку."
-fi
 
 #==============================================================================
-# 7. xfce-win10.sh — copy it to the user (apply LATER, as the user, in XFCE)
+# STEP win10_script — copy xfce-win10.sh to the user (apply it LATER, as the user,
+#   in an active XFCE session)
 #==============================================================================
-WIN10_SRC="$SELF_DIR/xfce-win10.sh"
-if [ -f "$WIN10_SRC" ]; then
-    cp -f "$WIN10_SRC" "$TARGET_HOME/xfce-win10.sh"
-    chmod +x "$TARGET_HOME/xfce-win10.sh"
-    chown "${TARGET_USER}:${TARGET_USER}" "$TARGET_HOME/xfce-win10.sh"
-    log "xfce-win10.sh скопирован в $TARGET_HOME (запусти от юзера в активной XFCE-сессии)"
-else
-    warn "xfce-win10.sh не найден рядом со скриптом — пропускаю. Положи его в $SELF_DIR и перезапусти, либо примени вручную."
-fi
+step_win10_script() {
+    local src="$SELF_DIR/xfce-win10.sh"
+    if [ -f "$src" ]; then
+        cp -f "$src" "$TARGET_HOME/xfce-win10.sh"
+        chmod +x "$TARGET_HOME/xfce-win10.sh"
+        chown "${TARGET_USER}:${TARGET_USER}" "$TARGET_HOME/xfce-win10.sh"
+        log "xfce-win10.sh copied to $TARGET_HOME (run it as the user in an active XFCE session)"
+    else
+        warn "xfce-win10.sh not found next to the script — skipping. Put it in $SELF_DIR and rerun, or apply it manually."
+    fi
+}
 
 #==============================================================================
-# 8. NoMachine desktop launcher (client for connecting to the VPS)
-#    IMPORTANT: do NOT copy system .desktop files from /usr/share/applications:
-#    they contain a web-session MIME handler (NoDisplay=true, Exec ... --session),
-#    not a launcher. Generate our own clean launcher for plain nxplayer instead
-#    (stable path: /usr/NX/bin).
+# STEP nm_shortcut — NoMachine shortcut on the desktop (client for connecting to the VPS)
+#   IMPORTANT: we do NOT copy the system .desktop files from /usr/share/applications — those
+#   contain the web-session MIME handler (NoDisplay=true, Exec ... --session), not a launcher.
+#   Generating OUR OWN clean launcher pointed at plain nxplayer (stable path: /usr/NX/bin).
 #==============================================================================
-if id -u "$SVC_USER" >/dev/null 2>&1; then
-    SVC_HOME="$(getent passwd "$SVC_USER" | cut -d: -f6)"
-    log "Ярлык NoMachine на рабочем столе ($SVC_USER)"
-    DESKTOP_DIR="${SVC_HOME}/Desktop"
-    mkdir -p "$DESKTOP_DIR"
+step_nm_shortcut() {
+    if ! id -u "$SVC_USER" >/dev/null 2>&1; then
+        warn "User $SVC_USER not found — NoMachine shortcut not created"
+        return 0
+    fi
+    local svc_home desktop_dir nm_dst nm_icon bin_dir autostart_dir
+    svc_home="$(getent passwd "$SVC_USER" | cut -d: -f6)"
+    log "NoMachine desktop shortcut ($SVC_USER)"
 
-    NM_DST="${DESKTOP_DIR}/nomachine.desktop"
-    NM_ICON="$(find /usr/NX /usr/share/icons -type f \
+    # --- Pin XDG_DESKTOP_DIR=~/Desktop BEFORE the user's first login. Otherwise, with a
+    # Russian locale, xdg-user-dirs-update would create a localized "Desktop" folder on first login,
+    # XFCE would show that folder, and our shortcut would sit in the invisible Desktop folder.
+    # An existing entry in user-dirs.dirs takes priority — xdg won't overwrite it.
+    install -d -o "$SVC_USER" -g "$SVC_USER" "${svc_home}/.config"
+    if [ ! -f "${svc_home}/.config/user-dirs.dirs" ]; then
+        cat > "${svc_home}/.config/user-dirs.dirs" <<'EOF'
+XDG_DESKTOP_DIR="$HOME/Desktop"
+EOF
+        log "user-dirs.dirs: XDG_DESKTOP_DIR pinned to ~/Desktop (guards against a Russian-locale localized \"Desktop\" folder)"
+    fi
+
+    desktop_dir="${svc_home}/Desktop"
+    mkdir -p "$desktop_dir"
+
+    nm_dst="${desktop_dir}/nomachine.desktop"
+    nm_icon="$(find /usr/NX /usr/share/icons -type f \
         \( -iname 'nxplayer*.png' -o -iname 'nxplayer*.svg' \
            -o -iname 'nomachine*.png' -o -iname 'nomachine*.svg' \) 2>/dev/null | head -n1)"
-    [ -z "$NM_ICON" ] && NM_ICON="nxplayer"
-    cat > "$NM_DST" <<EOF
+    [ -z "$nm_icon" ] && nm_icon="nxplayer"
+    cat > "$nm_dst" <<EOF
 [Desktop Entry]
 Version=1.0
 Type=Application
 Name=NoMachine
-Comment=Подключение к удалённому рабочему столу
+Comment=Connect to the remote desktop
 Exec=/usr/NX/bin/nxplayer
-Icon=${NM_ICON}
+Icon=${nm_icon}
 Terminal=false
 Categories=Network;RemoteAccess;
 EOF
-    chmod +x "$NM_DST"
-    chown "${SVC_USER}:${SVC_USER}" "$NM_DST"
+    chmod +x "$nm_dst"
 
-    # Marking a launcher as "trusted" in XFCE requires a LIVE session (gvfs). There
-    # is no live session during provisioning, so install a one-shot autostart job:
-    # on first login it writes the sha256-checksum metadata and removes itself.
-    # After that, the icon starts without the "Allow launch?" prompt.
-    log "Одноразовый автозапуск для пометки ярлыка доверенным (сработает при первом входе $SVC_USER)"
-    BIN_DIR="${SVC_HOME}/.local/bin"
-    AUTOSTART_DIR="${SVC_HOME}/.config/autostart"
-    mkdir -p "$BIN_DIR" "$AUTOSTART_DIR"
-    cat > "${BIN_DIR}/nm-trust-once.sh" <<'EOF'
+    # Marking as "trusted" in XFCE requires a LIVE session (gvfs). At rollout time there
+    # isn't one, so we set up a one-shot autostart: on first login it stamps a sha256
+    # checksum and removes itself. After that the icon launches without an "Allow execution?" prompt.
+    log "One-shot autostart to mark the shortcut trusted (fires on $SVC_USER's first login)"
+    bin_dir="${svc_home}/.local/bin"
+    autostart_dir="${svc_home}/.config/autostart"
+    mkdir -p "$bin_dir" "$autostart_dir"
+    cat > "${bin_dir}/nm-trust-once.sh" <<'EOF'
 #!/usr/bin/env bash
-f="$HOME/Desktop/nomachine.desktop"
+# Belt and suspenders: ask xdg for the real desktop directory,
+# fall back to default ~/Desktop if unavailable (we've pinned it in user-dirs.dirs).
+d="$(xdg-user-dir DESKTOP 2>/dev/null || true)"
+[ -n "$d" ] || d="$HOME/Desktop"
+f="$d/nomachine.desktop"
 [ -f "$f" ] || exit 0
 chmod +x "$f"
 gio set "$f" metadata::xfce-exe-checksum "$(sha256sum "$f" | cut -d' ' -f1)" 2>/dev/null || true
 rm -f "$HOME/.config/autostart/nm-trust-once.desktop"
 EOF
-    chmod +x "${BIN_DIR}/nm-trust-once.sh"
-    cat > "${AUTOSTART_DIR}/nm-trust-once.desktop" <<EOF
+    chmod +x "${bin_dir}/nm-trust-once.sh"
+    cat > "${autostart_dir}/nm-trust-once.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=NoMachine trust once
-Exec=${BIN_DIR}/nm-trust-once.sh
+Exec=${bin_dir}/nm-trust-once.sh
 NoDisplay=true
 X-GNOME-Autostart-enabled=true
 EOF
+    # Targeted chown of only what this step created (instead of a final chown -R on the whole home)
     chown -R "${SVC_USER}:${SVC_USER}" \
-        "$DESKTOP_DIR" "${SVC_HOME}/.config" "${SVC_HOME}/.local"
-else
-    warn "Пользователь $SVC_USER не найден — ярлык NoMachine не создан"
-fi
+        "$desktop_dir" "${svc_home}/.config" "${svc_home}/.local"
+}
 
 #==============================================================================
-# 9. WorkMon agent — installation from a neighboring directory
+# STEP workmon — install the agent from a directory next to the script
 #==============================================================================
-WORKMON_DIR="$SELF_DIR/$WORKMON_AGENT_DIRNAME"
-WORKMON_INSTALLER="$WORKMON_DIR/install.sh"
-if [ -f "$WORKMON_INSTALLER" ]; then
-    log "Запускаю установщик WorkMon agent: $WORKMON_INSTALLER"
-    chmod +x "$WORKMON_INSTALLER"
-    ( cd "$WORKMON_DIR" && bash "$WORKMON_INSTALLER" ) || die "Установка WorkMon agent завершилась ошибкой"
-    log "WorkMon agent установлен"
-else
-    warn "Не найден $WORKMON_INSTALLER — пропускаю установку WorkMon agent. Положи $WORKMON_AGENT_DIRNAME рядом со скриптом и перезапусти."
-fi
+step_workmon() {
+    local dir="$SELF_DIR/$WORKMON_AGENT_DIRNAME" installer
+    installer="$dir/install.sh"
+    if [ -f "$installer" ]; then
+        log "Running the WorkMon agent installer: $installer"
+        chmod +x "$installer"
+        ( cd "$dir" && bash "$installer" ) || die "WorkMon agent installation failed"
+        log "WorkMon agent installed"
+    else
+        warn "$installer not found — skipping WorkMon agent installation. Put $WORKMON_AGENT_DIRNAME next to the script and rerun."
+    fi
+}
 
-
-
-# --- Final permission safety net: the whole smm $HOME belongs to smm. ---
-if id -u "$SVC_USER" >/dev/null 2>&1; then
-    SVC_HOME_FINAL="$(getent passwd "$SVC_USER" | cut -d: -f6)"
-    chown -R "${SVC_USER}:${SVC_USER}" "$SVC_HOME_FINAL"
-fi
 #==============================================================================
-# SUMMARY
+# STEP summary — final report
 #==============================================================================
-log "ГОТОВО. Сводка:"
-echo "  Рабочий стол: XFCE, вход через lightdm (ручной)."
-echo "  ПО:           NoMachine (клиент+сервер), WireGuard, PipeWire+утилиты, NetworkManager."
-echo
-echo "  >>> ПУБЛИЧНЫЙ КЛЮЧ ЭТОГО КЛИЕНТА (добавь как [Peer] на VPS):"
-echo "      $CLIENT_PUB"
-echo "      (на VPS: AllowedIPs = 10.8.0.2/32 для этого peer)"
-echo
-warn "ДАЛЬШЕ — по порядку (full-tunnel: если ошибёшься в WG, потеряешь интернет, поэтому делай ЗА ноутом):"
-echo "   1) Добавь ключ выше в /etc/wireguard/wg0.conf на VPS, на VPS:  wg-quick up wg0 (или systemctl restart)."
-echo "   2) Здесь подними туннель:        sudo wg-quick up ${WG_IFACE}"
-echo "      Проверь:                      ping 10.8.0.1   и   curl ifconfig.me  (должен показать IP VPS)."
-echo "   3) Автозапуск + ретраи: WG_AUTOSTART=${WG_AUTOSTART}."
-if [ "$WG_AUTOSTART" = "yes" ]; then
-echo "      УЖЕ включены: wg-quick@${WG_IFACE} (boot) + wg-watchdog.timer (каждые 30с переподнимает мёртвый туннель)."
-echo "      Туннель поднимется сам после ребута — но только если peer на VPS уже добавлен (п.1)!"
-echo "      ЕСЛИ ПРОПАЛ ИНТЕРНЕТ (peer ещё не настроен):"
-echo "        sudo systemctl disable --now wg-quick@${WG_IFACE} wg-watchdog.timer && sudo wg-quick down ${WG_IFACE}"
-else
-echo "      Юниты установлены, но disabled. Включить:  sudo systemctl enable --now wg-quick@${WG_IFACE} wg-watchdog.timer"
-fi
-echo "   4) Аудио-туннель — по твоей .md (module-native-protocol-tcp на 10.8.0.2:4713),"
-echo "      ПОСЛЕ поднятия WG. Учти: устройство 44100Hz, в .md rate=48000 (PipeWire ресемплит)."
-echo "   5) Запусти NoMachine (ярлык на рабочем столе) и добавь подключение к VPS: host 10.8.0.1, протокол NX."
-echo "   6) Залогинься в XFCE и примени облик:   bash ~/xfce-win10.sh   (НЕ от root)."
-echo
-echo "   Диагностика watchdog:  journalctl -t wg-watchdog -n 30   |   systemctl list-timers wg-watchdog.timer"
-echo
-warn "Безопасность: NoMachine-сервер слушает порт 4000 — не пробрасывай его в интернет с роутера."
-echo "   Ходи к этой машине только по LAN или через wg0 (10.8.0.2)."
-echo "Измените хост нейм ноутбука командой - hostnamectl set-hostname your-new-hostname"
-log "Рекомендуется перезагрузка, чтобы подхватились прошивки/микрокод и стартовал lightdm:  sudo reboot"
+step_summary() {
+    local client_pub wg_peer_ip
+    client_pub="$(cat /etc/wireguard/client_public.key 2>/dev/null || echo '<key not generated yet — run the wireguard step>')"
+    wg_peer_ip="${WG_CLIENT_ADDR%%/*}"
+    [ -n "$wg_peer_ip" ] || wg_peer_ip="<WG_CLIENT_ADDR>"
+
+    log "DONE. Summary:"
+    echo "  Hostname:     $(cat /etc/hostname 2>/dev/null || hostname)"
+    echo "  Desktop:      XFCE, login via lightdm (manual)."
+    echo "  Software:     NoMachine (client+server), WireGuard, PipeWire+utilities, NetworkManager."
+    echo
+    echo "  >>> THIS CLIENT'S PUBLIC KEY (add as a [Peer] on the VPS):"
+    echo "      $client_pub"
+    echo "      (on the VPS: AllowedIPs = ${wg_peer_ip}/32 for this peer)"
+    echo
+    warn "NEXT — in order (full-tunnel: mess up WG and you'll lose internet, so do this AT the laptop):"
+    echo "   1) Add the key above to /etc/wireguard/wg0.conf on the VPS, then on the VPS:  wg-quick up wg0 (or systemctl restart)."
+    echo "   2) Here, bring up the tunnel:        sudo wg-quick up ${WG_IFACE}"
+    echo "      Check:                            ping 10.8.0.1   and   curl ifconfig.me  (should show the VPS IP)."
+    echo "   3) Auto-start + retries: WG_AUTOSTART=${WG_AUTOSTART}."
+    if [ "$WG_AUTOSTART" = "yes" ]; then
+        echo "      ALREADY enabled: wg-quick@${WG_IFACE} (boot) + wg-watchdog.timer (revives a dead tunnel every 30s)."
+        echo "      The tunnel will come up on its own after a reboot — but only if the peer has already been added on the VPS (step 1)!"
+        echo "      IF INTERNET DROPS (peer not configured yet):"
+        echo "        sudo systemctl disable --now wg-quick@${WG_IFACE} wg-watchdog.timer && sudo wg-quick down ${WG_IFACE}"
+    else
+        echo "      Units installed but disabled. To enable:  sudo systemctl enable --now wg-quick@${WG_IFACE} wg-watchdog.timer"
+    fi
+    echo "   4) Audio tunnel — per your .md (module-native-protocol-tcp on ${wg_peer_ip}:4713),"
+    echo "      AFTER bringing up WG. Note: the device is 44100Hz, the .md uses rate=48000 (PipeWire resamples)."
+    echo "   5) Launch NoMachine (desktop shortcut) and add a connection to the VPS: host 10.8.0.1, protocol NX."
+    echo "   6) Log in to XFCE and apply the look:   bash ~/xfce-win10.sh   (NOT as root)."
+    echo
+    echo "   Watchdog diagnostics:  journalctl -t wg-watchdog -n 30   |   systemctl list-timers wg-watchdog.timer"
+    echo "   Rollout log:           $LOG  (root:${ADMIN_GROUP}, 640)"
+    echo
+    warn "Security: the NoMachine server listens on port 4000 — don't forward it to the internet from your router."
+    echo "   Only reach this machine over the LAN or via wg0 (${wg_peer_ip})."
+    log "A reboot is recommended so firmware/microcode gets picked up and lightdm starts:  sudo reboot"
+}
+
+#==============================================================================
+# DISPATCHER
+#==============================================================================
+# Order matters: hostname/ssh — before full-upgrade; desktop — before nomachine
+# (node.cfg references startxfce4); wireguard — before summary (key for the summary).
+STEPS=(
+    hostname
+    ssh_hostkeys
+    collect_key
+    users
+    grub
+    apt_sources
+    upgrade
+    desktop
+    audio
+    wireguard
+    watchdog
+    nomachine
+    win10_script
+    nm_shortcut
+    workmon
+    summary
+)
+
+main() {
+    local s
+    if [ -n "${ONLY:-}" ]; then
+        warn "ONLY=${ONLY} mode — running only the listed steps"
+    fi
+    for s in "${STEPS[@]}"; do
+        will_run "$s" || continue
+        "step_${s}"
+    done
+}
+
+main "$@"
