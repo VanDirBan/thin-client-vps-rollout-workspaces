@@ -1,0 +1,34 @@
+# Runtime/editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+secrets/
+private/
+
+# Runtime data, screenshots, encrypted exports, logs
+screenshots/
+exports/
+downloads/
+*.age
+*.log
+
+# Source archives sent for import should be unpacked and reviewed before commit
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.rar
