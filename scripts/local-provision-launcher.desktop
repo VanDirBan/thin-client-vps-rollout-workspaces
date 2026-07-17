@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Thin-client rollout
+Comment=Run the interactive local-provision launcher
+Exec=bash -c "exec bash \"\$(dirname \"\$1\")/local-provision-launcher.sh\" --from-desktop \"\$1\"" _ %k
+Icon=utilities-terminal
+Terminal=true
+Categories=System;Settings;
+StartupNotify=false

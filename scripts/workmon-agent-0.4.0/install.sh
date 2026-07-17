@@ -74,7 +74,7 @@ if [[ ! -f /etc/workmon/workmon.conf ]]; then
   write_file /etc/workmon/workmon.conf 0600 root root <<'CONF'
 # WorkMon worker agent 0.4.0 configuration (capture-only).
 
-SCREENSHOT_INTERVAL_SECONDS=5
+SCREENSHOT_INTERVAL_SECONDS=30
 LOCAL_SPOOL_MAX_MB=50000
 ASSET_ID_FILE=/etc/workmon/asset_id
 PUBLIC_KEY_FILE=/etc/workmon/public.key

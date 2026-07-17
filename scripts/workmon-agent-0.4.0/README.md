@@ -6,7 +6,7 @@ Collection and decryption happen separately, from the admin laptop (the `workmon
 
 ## 1. Compliance
 
-Company-owned equipment only, under an approved monitoring policy, a legal basis, and employee notice. The agent doesn't mask itself, resist removal, self-heal, or send data anywhere — it doesn't touch the network at all (`IPAddressDeny=any` is set in the unit). Screenshots every 5 seconds is dense monitoring; align the proportionality, retention period, and notice with your legal team (for UA — the Law "On Personal Data Protection"; under an EU nexus — GDPR). This is not legal advice.
+Company-owned equipment only, under an approved monitoring policy, a legal basis, and employee notice. The installer-created default captures every 30 seconds; lowering the interval to 5 seconds is dense monitoring. Align proportionality, retention, and notice with your legal team (for UA — the Law "On Personal Data Protection"; under an EU nexus — GDPR). The agent doesn't mask itself, resist removal, self-heal, or send data anywhere — it doesn't touch the network at all (`IPAddressDeny=any` is set in the unit). This is not legal advice.
 
 ## 2. Key model (important)
 
@@ -58,7 +58,7 @@ File names: `<asset-id>_<YYYY-MM-DD_HH-MM-SS>_<hostname>_<user>.png.age`.
 
 ## 6. Configuration
 
-`/etc/workmon/workmon.conf` — capture settings only: `SCREENSHOT_INTERVAL_SECONDS`, `LOCAL_SPOOL_MAX_MB`, `PUBLIC_KEY_FILE`, `SKIP_IDENTICAL_FRAMES`, `GUI_USER`, `CAPTURE_BACKEND`.
+`/etc/workmon/workmon.conf` — capture settings only: `SCREENSHOT_INTERVAL_SECONDS` (installer default `30`), `LOCAL_SPOOL_MAX_MB`, `PUBLIC_KEY_FILE`, `SKIP_IDENTICAL_FRAMES`, `GUI_USER`, `CAPTURE_BACKEND`.
 
 `LOCAL_SPOOL_MAX_MB` — a safeguard against filling up the disk between collection runs: once exceeded, the oldest `.age` files are deleted (the earliest frames are lost). Set it with headroom for the longest expected offline period between your connections.
 

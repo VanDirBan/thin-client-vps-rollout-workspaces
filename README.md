@@ -62,12 +62,15 @@ This repository is currently the baseline implementation. It is expected to evol
 ```text
 .
 ├── docs/
+│   ├── local-provision-admin-guide.md  # Physical laptop/thin-client rollout runbook
 │   └── vps-provision-installer.md      # Admin-laptop VPS rollout runbook
 ├── env/
 │   ├── local-provision.env.example     # Example env for thin-client provisioning
 │   └── vps-provision.env.example       # Example env for VPS provisioning/launcher
 ├── scripts/
 │   ├── local-provision.sh              # Physical laptop/thin-client rollout
+│   ├── local-provision-launcher.sh     # Interactive local laptop rollout wrapper
+│   ├── local-provision-launcher.desktop
 │   ├── vps-provision.sh                # VPS desktop rollout
 │   ├── xfce-win10.sh                   # User-session XFCE Windows-like look
 │   ├── admin/
@@ -167,8 +170,10 @@ It prepares a Debian 13/XFCE machine with:
 - WireGuard full tunnel client config;
 - WireGuard watchdog timer;
 - NoMachine package;
+- x11vnc fallback bound to the WireGuard interface only;
 - copied `xfce-win10.sh` helper;
 - NoMachine desktop shortcut;
+- power/lock settings so the service user's screen does not blank or lock;
 - WorkMon worker agent installation from `scripts/workmon-agent-0.4.0/`.
 
 Required per-machine values:
@@ -178,13 +183,32 @@ Required per-machine values:
 
 Important WireGuard note:
 
-If `WG_AUTOSTART=yes` is used before the corresponding peer is configured on the VPS, the laptop may boot into a full-tunnel route with no working connectivity. Either configure the VPS peer first or use `WG_AUTOSTART=no` during initial staging.
+If `WG_AUTOSTART=yes` is used before the corresponding peer is configured on the WireGuard server/firewall, the laptop may boot into a full-tunnel route with no working connectivity. Either configure the server peer first or use `WG_AUTOSTART=no` during initial staging.
+
+`local-provision-launcher.sh` is the recommended routine entrypoint for laptop rollout. It loads optional ignored `.env.local-provision` values, asks for the laptop tunnel number, hostname, and optional x11vnc password, then runs `local-provision.sh` with environment overrides. The desktop shortcut expects to live next to the launcher script.
+
+Detailed operator flow is in `docs/local-provision-admin-guide.md`.
 
 Debug mode:
 
 ```bash
 sudo ONLY=wireguard,watchdog WG_CLIENT_ADDR=10.8.0.5/24 bash scripts/local-provision.sh
 ```
+
+### `scripts/local-provision-launcher.sh`
+
+Interactive local laptop wrapper for routine physical thin-client rollout.
+
+It:
+
+- optionally loads ignored `.env.local-provision` values;
+- asks for a laptop tunnel number or full CIDR address;
+- rejects the configured VPS address range for laptop allocation;
+- asks for hostname and optional x11vnc password;
+- supports full rollout or selected `ONLY=` steps;
+- warns if WireGuard server details or collector SSH public key are still placeholders.
+
+The matching `.desktop` file is for a prepared desktop/USB folder and expects to live next to the launcher.
 
 ### `scripts/xfce-win10.sh`
 
@@ -221,7 +245,7 @@ Role: **capture and encrypt only**.
 It does:
 
 - finds the active local X11 session;
-- captures screenshots with `scrot` by default;
+- captures screenshots with `scrot` by default, with installer-created config defaulting to a 30-second interval;
 - hashes frames and can skip byte-identical frames;
 - encrypts each PNG immediately with a shared `age` public recipient;
 - atomically drops `.age` files into `/var/lib/workmon/spool`;
@@ -397,7 +421,14 @@ Edit it per machine:
 - collector SSH public key in `COLLECT_PUBKEY` if root SSH collection should be pre-authorized;
 - temporary service user password if needed.
 
-Run provisioning:
+Run provisioning either through the interactive launcher:
+
+```bash
+cd scripts
+bash local-provision-launcher.sh
+```
+
+or manually:
 
 ```bash
 set -a
@@ -406,11 +437,13 @@ set +a
 sudo -E bash scripts/local-provision.sh
 ```
 
-After provisioning, log into XFCE as the target desktop user and apply the Windows-like desktop profile:
+After provisioning, log into XFCE as the service user and apply the Windows-like desktop profile:
 
 ```bash
-bash ~/xfce-win10.sh
+bash ~/Desktop/xfce-win10.sh
 ```
+
+Then add the generated WireGuard public key as a server-side peer, bring up `wg0`, verify routing, change initial passwords, and reboot. The detailed sequence is in `docs/local-provision-admin-guide.md`.
 
 ### 4. Deploy WorkMon age public key to workers
 
@@ -488,6 +521,13 @@ Worker laptop:
 /etc/wireguard/wg0.conf
 /etc/systemd/system/wg-watchdog.service
 /etc/systemd/system/wg-watchdog.timer
+/etc/systemd/system/x11vnc.service
+/usr/local/sbin/x11vnc-service
+/etc/default/x11vnc
+/etc/x11vnc.pass
+/etc/lightdm/lightdm.conf.d/20-noblank.conf
+/home/<service-user>/Desktop/xfce-win10.sh
+/home/<service-user>/Desktop/nomachine.desktop
 /etc/workmon/workmon.conf
 /etc/workmon/asset_id
 /etc/workmon/public.key
@@ -548,6 +588,7 @@ Current known gap:
 
 - Firewall setup is not yet implemented in the provisioning scripts.
 - NoMachine may listen on port `4000` publicly after VPS rollout.
+- Local laptop `x11vnc` is designed to bind only to the WireGuard IPv4 address, but firewall automation for it is still not part of the repository.
 - WireGuard server-side peer configuration is not automated in this repository yet; the VPS-side client config is supported by `scripts/vps-provision.sh` once the server details are provided.
 
 Before production use, add and verify firewall rules so that:
@@ -564,6 +605,7 @@ Recommended checks after changing scripts:
 ```bash
 # Shell syntax
 bash -n scripts/local-provision.sh
+bash -n scripts/local-provision-launcher.sh
 bash -n scripts/vps-provision.sh
 bash -n scripts/xfce-win10.sh
 bash -n scripts/admin/copy_key.sh

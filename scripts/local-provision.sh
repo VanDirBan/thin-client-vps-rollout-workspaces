@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 #==============================================================================
 # local-provision.sh — provisioning the LOCAL PC (Debian 13 "trixie", physical machine)
-#   as a thin client to the VPS: XFCE + NoMachine (client+server) + WireGuard + audio.
+#   as a thin client to the VPS: XFCE + NoMachine (client+server) + WireGuard + audio
+#   + x11vnc fallback access to the physical screen over wg0 only.
 #
-# Machine: HP 255 G7, AMD Ryzen 5 3500U (Picasso/Vega).
+# Machine class: physical thin-client laptop (original source targeted HP 255 G7 / Ryzen 5 3500U).
 #
 # USAGE (both parameters are REQUIRED — unique for each machine in the fleet):
 #   sudo NEW_HOSTNAME=tc-05 WG_CLIENT_ADDR=10.8.0.5/24 bash local-provision.sh
@@ -14,7 +15,7 @@
 # Idempotent: re-running does not break what's already been done.
 #
 # IMPORTANT: put xfce-win10.sh in the same folder as this script — it will be copied
-#        to the target user (apply it LATER, as the user, in an active XFCE session).
+#        to the service user's desktop (apply it LATER, as that user, in an active XFCE session).
 #==============================================================================
 set -euo pipefail
 
@@ -53,6 +54,7 @@ WG_SERVER_PUBKEY="${WG_SERVER_PUBKEY:-REPLACE_WITH_WG_SERVER_PUBLIC_KEY}"
 WG_ENDPOINT="${WG_ENDPOINT:-REPLACE_WITH_VPS_ENDPOINT:51820}"
 WG_ALLOWED="${WG_ALLOWED:-0.0.0.0/0, ::/0}"
 WG_KEEPALIVE="${WG_KEEPALIVE:-25}"
+WG_GATEWAY="${WG_GATEWAY:-10.8.0.1}"       # used only in operator-facing checks/messages
 # DNS through the tunnel (uncomment in wg0.conf below if the VPS has a resolver).
 
 # Auto-start the tunnel on boot + watchdog (retries). "yes" = enable, "no" = only
@@ -73,6 +75,15 @@ NOMACHINE_MD5="${NOMACHINE_MD5:-8af5efe7b8ad3872a4681c4acf551b62}"   # empty "" 
 # MD5 mismatch = STOP (die): an integrity check that just "warns and moves on"
 # doesn't protect against anything. New build released — update NOMACHINE_* and MD5 deliberately.
 NOMACHINE_URL="https://download.nomachine.com/download/${NOMACHINE_BRANCH}/Linux/nomachine_${NOMACHINE_VERSION}_${NOMACHINE_BUILD}_amd64.deb"
+
+# --- x11vnc: fallback access to the PHYSICAL laptop screen, bypassing NoMachine.
+#     It listens only on the IPv4 address assigned to ${WG_IFACE}; there is no LAN/public fallback.
+#     Classic VNC uses exactly 8 password characters, so keep the default/prompted value at 8 chars.
+X11VNC_ENABLE="${X11VNC_ENABLE:-yes}"                    # "no" = skip the whole step
+X11VNC_PASSWORD="${X11VNC_PASSWORD:-CHANGEME}"            # weak rollout default; change after provisioning
+X11VNC_PORT="${X11VNC_PORT:-5900}"
+X11VNC_DISPLAY="${X11VNC_DISPLAY:-:0}"                    # physical X display managed by LightDM
+X11VNC_PASS_FILE="${X11VNC_PASS_FILE:-/etc/x11vnc.pass}"
 
 # --- Windows-10 theme (B00merang): PINNED to specific commits, not master.
 #     Otherwise fleet machines rolled out on different days would get different theme versions.
@@ -427,6 +438,17 @@ Endpoint = ${WG_ENDPOINT}
 AllowedIPs = ${WG_ALLOWED}
 PersistentKeepalive = ${WG_KEEPALIVE}
 EOF
+
+    # Keep NetworkManager/nm-applet away from WireGuard; wg-quick/systemd own it.
+    if systemctl list-unit-files NetworkManager.service >/dev/null 2>&1; then
+        install -d -m 755 /etc/NetworkManager/conf.d
+        cat > /etc/NetworkManager/conf.d/90-unmanaged-wireguard.conf <<EOF
+[keyfile]
+unmanaged-devices=interface-name:${WG_IFACE}
+EOF
+        log "NetworkManager unmanaged rule installed for ${WG_IFACE}"
+    fi
+
     log "Wrote /etc/wireguard/${WG_IFACE}.conf, Address=${WG_CLIENT_ADDR} (NOT bringing up the tunnel in this run)"
 }
 
@@ -560,19 +582,128 @@ step_nomachine() {
 }
 
 #==============================================================================
-# STEP win10_script — copy xfce-win10.sh to the user (apply it LATER, as the user,
-#   in an active XFCE session)
+# STEP x11vnc — fallback VNC to the physical X display, listening only on wg0.
+#   This is an independent rescue path when the laptop-side NoMachine service is
+#   broken or misconfigured. The runner discovers the IPv4 address on ${WG_IFACE};
+#   no address means no listener, so there is never a 0.0.0.0 fallback.
+#==============================================================================
+step_x11vnc() {
+    if [ "$X11VNC_ENABLE" != "yes" ]; then
+        log "x11vnc disabled (X11VNC_ENABLE=no) — skipping"
+        return 0
+    fi
+
+    log "x11vnc: physical-screen fallback over ${WG_IFACE}"
+    apt-get install -y --no-install-recommends x11vnc
+
+    [ ${#X11VNC_PASSWORD} -eq 8 ] \
+        || die "X11VNC_PASSWORD must be exactly 8 characters (classic VNC limit), got: ${#X11VNC_PASSWORD}"
+
+    # If the password file already exists, keep it. This avoids overwriting a changed
+    # local password on reruns, mirroring the SVC_USER password behavior.
+    if [ -f "$X11VNC_PASS_FILE" ]; then
+        log "x11vnc: $X11VNC_PASS_FILE already exists — leaving password unchanged"
+    else
+        # x11vnc -storepasswd does not work reliably from stdin in non-interactive runs;
+        # during rollout there should be no hostile local users watching ps output.
+        ( umask 077
+          x11vnc -storepasswd "$X11VNC_PASSWORD" "$X11VNC_PASS_FILE" >/dev/null )
+        chown root:root "$X11VNC_PASS_FILE"
+        chmod 600 "$X11VNC_PASS_FILE"
+        warn "x11vnc password is the rollout default. Change it: sudo x11vnc -storepasswd $X11VNC_PASS_FILE && sudo systemctl restart x11vnc"
+    fi
+
+    install -m 640 -o root -g "$ADMIN_GROUP" /dev/null /etc/default/x11vnc
+    cat > /etc/default/x11vnc <<EOF
+# Managed by local-provision.sh
+INTERFACE="${WG_IFACE}"
+PORT="${X11VNC_PORT}"
+DISPLAY_NUMBER="${X11VNC_DISPLAY}"
+PASS_FILE="${X11VNC_PASS_FILE}"
+EOF
+
+    cat > /usr/local/sbin/x11vnc-service <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+CONFIG_FILE="/etc/default/x11vnc"
+[ -r "$CONFIG_FILE" ] || { echo "Missing config: $CONFIG_FILE" >&2; exit 1; }
+# shellcheck disable=SC1090,SC1091
+source "$CONFIG_FILE"
+
+bind_ip="$(ip -4 -o addr show dev "$INTERFACE" scope global 2>/dev/null \
+    | awk 'NR == 1 { split($4, a, "/"); print a[1] }')"
+if [ -z "$bind_ip" ]; then
+    echo "No IPv4 address on $INTERFACE yet; retrying via systemd" >&2
+    exit 1
+fi
+
+# FD_XDM=1 + -auth guess covers both the LightDM greeter and the logged-in user session.
+exec /usr/bin/x11vnc \
+    -env FD_XDM=1 \
+    -auth guess \
+    -display "$DISPLAY_NUMBER" \
+    -forever \
+    -shared \
+    -repeat \
+    -nolookup \
+    -rfbauth "$PASS_FILE" \
+    -rfbport "$PORT" \
+    -listen "$bind_ip" \
+    -no6
+EOF
+    chmod 755 /usr/local/sbin/x11vnc-service
+
+    cat > /etc/systemd/system/x11vnc.service <<EOF
+[Unit]
+Description=x11vnc on the physical X display (${WG_IFACE} only)
+Documentation=man:x11vnc(1)
+Wants=network-online.target
+After=network-online.target display-manager.service wg-quick@${WG_IFACE}.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/x11vnc-service
+Restart=always
+RestartSec=5s
+TimeoutStopSec=10s
+
+[Install]
+WantedBy=graphical.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable x11vnc.service >/dev/null 2>&1 || warn "failed to enable x11vnc.service"
+    # Do not start now: wg0 is usually still down and the service would only spin in retries.
+    log "x11vnc.service installed and enabled; it will listen after ${WG_IFACE} has an IPv4 address"
+}
+
+#==============================================================================
+# STEP win10_script — copy xfce-win10.sh to the service user's desktop.
+#   Apply it LATER as that user, in an active XFCE session.
 #==============================================================================
 step_win10_script() {
     local src="$SELF_DIR/xfce-win10.sh"
-    if [ -f "$src" ]; then
-        cp -f "$src" "$TARGET_HOME/xfce-win10.sh"
-        chmod +x "$TARGET_HOME/xfce-win10.sh"
-        chown "${TARGET_USER}:${TARGET_USER}" "$TARGET_HOME/xfce-win10.sh"
-        log "xfce-win10.sh copied to $TARGET_HOME (run it as the user in an active XFCE session)"
-    else
-        warn "xfce-win10.sh not found next to the script — skipping. Put it in $SELF_DIR and rerun, or apply it manually."
+
+    if ! id -u "$SVC_USER" >/dev/null 2>&1; then
+        warn "User $SVC_USER not found — xfce-win10.sh was not copied"
+        return 0
     fi
+
+    local svc_home desktop_dir dst
+    svc_home="$(getent passwd "$SVC_USER" | cut -d: -f6)"
+    desktop_dir="${svc_home}/Desktop"
+    dst="${desktop_dir}/xfce-win10.sh"
+
+    if [ ! -f "$src" ]; then
+        warn "xfce-win10.sh not found next to the script: $src"
+        return 0
+    fi
+
+    install -d -m 755 -o "$SVC_USER" -g "$SVC_USER" "$desktop_dir"
+    install -m 755 -o "$SVC_USER" -g "$SVC_USER" "$src" "$dst"
+    log "xfce-win10.sh copied to $SVC_USER's desktop: $dst"
 }
 
 #==============================================================================
@@ -657,6 +788,104 @@ EOF
 }
 
 #==============================================================================
+# STEP power — keep the screen on and disable locking for the service user.
+#   No xfconf-query here: during rollout there is no live ${SVC_USER} session, so
+#   we lay down per-channel XML for first login plus a small xset autostart.
+#==============================================================================
+step_power() {
+    if ! id -u "$SVC_USER" >/dev/null 2>&1; then
+        warn "User $SVC_USER not found — power/locking settings were not applied"
+        return 0
+    fi
+
+    local svc_home xml_dir bin_dir autostart_dir
+    svc_home="$(getent passwd "$SVC_USER" | cut -d: -f6)"
+    log "Power/locking for $SVC_USER: screen always on, local lock disabled"
+
+    if pgrep -u "$SVC_USER" xfconfd >/dev/null 2>&1; then
+        warn "$SVC_USER has a live session (xfconfd is running); XML may be overwritten on logout"
+        warn "Apply settings inside the session with xfconf-query, or log the user out and rerun ONLY=power"
+    fi
+
+    xml_dir="${svc_home}/.config/xfce4/xfconf/xfce-perchannel-xml"
+    install -d "$xml_dir"
+
+    cat > "${xml_dir}/xfce4-power-manager.xml" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfce4-power-manager" version="1.0">
+  <property name="xfce4-power-manager" type="empty">
+    <property name="presentation-mode" type="bool" value="true"/>
+    <property name="dpms-enabled" type="bool" value="false"/>
+    <property name="blank-on-ac" type="int" value="0"/>
+    <property name="blank-on-battery" type="int" value="0"/>
+    <property name="dpms-on-ac-sleep" type="uint" value="0"/>
+    <property name="dpms-on-ac-off" type="uint" value="0"/>
+    <property name="dpms-on-battery-sleep" type="uint" value="0"/>
+    <property name="dpms-on-battery-off" type="uint" value="0"/>
+    <property name="inactivity-on-ac" type="uint" value="0"/>
+    <property name="inactivity-on-battery" type="uint" value="0"/>
+    <property name="lock-screen-suspend-hibernate" type="bool" value="false"/>
+    <property name="logind-handle-lid-switch" type="bool" value="false"/>
+    <property name="lid-action-on-ac" type="uint" value="0"/>
+    <property name="lid-action-on-battery" type="uint" value="0"/>
+  </property>
+</channel>
+EOF
+
+    cat > "${xml_dir}/xfce4-screensaver.xml" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfce4-screensaver" version="1.0">
+  <property name="saver" type="empty">
+    <property name="enabled" type="bool" value="false"/>
+    <property name="idle-activation" type="empty">
+      <property name="enabled" type="bool" value="false"/>
+    </property>
+  </property>
+  <property name="lock" type="empty">
+    <property name="enabled" type="bool" value="false"/>
+  </property>
+</channel>
+EOF
+
+    autostart_dir="${svc_home}/.config/autostart"
+    install -d "$autostart_dir"
+    cat > "${autostart_dir}/light-locker.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Screen Locker
+Hidden=true
+EOF
+
+    bin_dir="${svc_home}/.local/bin"
+    install -d "$bin_dir"
+    cat > "${bin_dir}/noblank.sh" <<'EOF'
+#!/usr/bin/env bash
+xset s off
+xset s noblank
+xset -dpms
+EOF
+    chmod +x "${bin_dir}/noblank.sh"
+    cat > "${autostart_dir}/noblank.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=No blank / no DPMS
+Exec=${bin_dir}/noblank.sh
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+EOF
+
+    chown -R "${SVC_USER}:${SVC_USER}" "${svc_home}/.config" "${svc_home}/.local"
+
+    install -d -m 755 /etc/lightdm/lightdm.conf.d
+    cat > /etc/lightdm/lightdm.conf.d/20-noblank.conf <<'EOF'
+# Managed by local-provision.sh: keep both the greeter and user session from blanking.
+[Seat:*]
+xserver-command=X -s 0 -dpms
+EOF
+    log "power: XFPM/screensaver XML, light-locker disabled for $SVC_USER, xset autostart, lightdm -s 0 -dpms"
+}
+
+#==============================================================================
 # STEP workmon — install the agent from a directory next to the script
 #==============================================================================
 step_workmon() {
@@ -684,35 +913,44 @@ step_summary() {
     log "DONE. Summary:"
     echo "  Hostname:     $(cat /etc/hostname 2>/dev/null || hostname)"
     echo "  Desktop:      XFCE, login via lightdm (manual)."
-    echo "  Software:     NoMachine (client+server), WireGuard, PipeWire+utilities, NetworkManager."
+    echo "  Power:        screen stays on for greeter and ${SVC_USER}; local lock disabled for ${SVC_USER}."
+    echo "  Software:     NoMachine (client+server), WireGuard, PipeWire+utilities, NetworkManager, x11vnc."
     echo
-    echo "  >>> THIS CLIENT'S PUBLIC KEY (add as a [Peer] on the VPS):"
+    echo "  >>> THIS CLIENT'S PUBLIC KEY (add as a [Peer] on the WG server):"
     echo "      $client_pub"
-    echo "      (on the VPS: AllowedIPs = ${wg_peer_ip}/32 for this peer)"
+    echo "      (server-side AllowedIPs = ${wg_peer_ip}/32 for this peer)"
     echo
-    warn "NEXT — in order (full-tunnel: mess up WG and you'll lose internet, so do this AT the laptop):"
-    echo "   1) Add the key above to /etc/wireguard/wg0.conf on the VPS, then on the VPS:  wg-quick up wg0 (or systemctl restart)."
+    warn "NEXT — in order (full-tunnel: a bad WG peer can cut internet, so do this AT the laptop):"
+    echo "   1) Add the key above as a peer on the WireGuard server/firewall."
     echo "   2) Here, bring up the tunnel:        sudo wg-quick up ${WG_IFACE}"
-    echo "      Check:                            ping 10.8.0.1   and   curl ifconfig.me  (should show the VPS IP)."
+    echo "      Check:                            ping ${WG_GATEWAY}   and   curl ifconfig.me"
     echo "   3) Auto-start + retries: WG_AUTOSTART=${WG_AUTOSTART}."
     if [ "$WG_AUTOSTART" = "yes" ]; then
         echo "      ALREADY enabled: wg-quick@${WG_IFACE} (boot) + wg-watchdog.timer (revives a dead tunnel every 30s)."
-        echo "      The tunnel will come up on its own after a reboot — but only if the peer has already been added on the VPS (step 1)!"
+        echo "      The tunnel will come up after a reboot — but only if the peer exists on the server."
         echo "      IF INTERNET DROPS (peer not configured yet):"
         echo "        sudo systemctl disable --now wg-quick@${WG_IFACE} wg-watchdog.timer && sudo wg-quick down ${WG_IFACE}"
     else
         echo "      Units installed but disabled. To enable:  sudo systemctl enable --now wg-quick@${WG_IFACE} wg-watchdog.timer"
     fi
-    echo "   4) Audio tunnel — per your .md (module-native-protocol-tcp on ${wg_peer_ip}:4713),"
-    echo "      AFTER bringing up WG. Note: the device is 44100Hz, the .md uses rate=48000 (PipeWire resamples)."
-    echo "   5) Launch NoMachine (desktop shortcut) and add a connection to the VPS: host 10.8.0.1, protocol NX."
-    echo "   6) Log in to XFCE and apply the look:   bash ~/xfce-win10.sh   (NOT as root)."
+    echo "   4) Audio tunnel — configure after WG is working."
+    echo "   5) Launch NoMachine and add a connection to the matching VPS desktop."
+    echo "   6) Log in to XFCE as ${SVC_USER} and apply the look:   bash ~/Desktop/xfce-win10.sh   (NOT as root)."
     echo
     echo "   Watchdog diagnostics:  journalctl -t wg-watchdog -n 30   |   systemctl list-timers wg-watchdog.timer"
     echo "   Rollout log:           $LOG  (root:${ADMIN_GROUP}, 640)"
     echo
-    warn "Security: the NoMachine server listens on port 4000 — don't forward it to the internet from your router."
-    echo "   Only reach this machine over the LAN or via wg0 (${wg_peer_ip})."
+    warn "Security: the NoMachine server listens on port 4000 — do not forward it to the internet."
+    echo "   Reach this machine only over LAN or via wg0 (${wg_peer_ip})."
+    if [ "$X11VNC_ENABLE" = "yes" ]; then
+        echo
+        echo "  x11vnc fallback to the PHYSICAL screen, bypassing NoMachine:"
+        echo "      Connection: ${wg_peer_ip}:${X11VNC_PORT} — only after ${WG_IFACE} has this address."
+        warn "      VNC password uses the rollout default unless you supplied X11VNC_PASSWORD. Change it immediately after rollout."
+        echo "      Change: sudo x11vnc -storepasswd ${X11VNC_PASS_FILE} && sudo systemctl restart x11vnc"
+        echo "      If a firewall default-drop policy is added, allow: iifname \"${WG_IFACE}\" tcp dport ${X11VNC_PORT} accept"
+        echo "      Diagnostics: systemctl status x11vnc --no-pager | ss -ltnp | grep :${X11VNC_PORT}"
+    fi
     log "A reboot is recommended so firmware/microcode gets picked up and lightdm starts:  sudo reboot"
 }
 
@@ -734,8 +972,10 @@ STEPS=(
     wireguard
     watchdog
     nomachine
+    x11vnc
     win10_script
     nm_shortcut
+    power
     workmon
     summary
 )
