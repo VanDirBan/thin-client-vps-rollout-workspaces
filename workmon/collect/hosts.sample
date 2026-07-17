@@ -1,15 +1,15 @@
 # workmon-collect hosts — one worker per line: <host_or_wg_ip> [asset_id]
 # Copy this to /etc/workmon-collect/hosts and edit it.
 #
-# asset_id (the second column) is OPTIONAL. If not set — the receiving folder's
-# name is taken from the worker's hostname (short name, `hostname -s`), which you
-# make unique per user during hardware provisioning.
-# The second column is only needed to forcibly override the name.
+# asset_id (the second column) is OPTIONAL. If not set, the receiving folder name
+# is taken from the worker hostname (short name, `hostname -s`), which should be
+# made unique per user during hardware provisioning.
+# The second column is only needed to force an override.
 
-# Just WG addresses — names will come from the workers' hostnames:
+# Just WG addresses; names will come from the workers' hostnames:
 # 10.10.0.11
 # 10.10.0.12
 # 10.10.0.13
 
-# With an explicit folder name override:
+# With an explicit folder-name override:
 # 10.10.0.20   special-kiosk

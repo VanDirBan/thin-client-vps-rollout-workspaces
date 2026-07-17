@@ -11,8 +11,8 @@ if [[ "${1:-}" == "--purge" ]]; then
   PURGE=true
 fi
 
-# 0.1.1 only sets up manual execution and no units at all. But in case of upgrading
-# from a version that had units, we clean them up best-effort.
+# 0.1.1+ installs manual execution only and no units. If upgrading from a version
+# that had units, clean them up best-effort.
 echo "Removing any legacy systemd units (older versions)..."
 systemctl disable --now workmon-collect.timer 2>/dev/null || true
 systemctl stop workmon-collect.service 2>/dev/null || true

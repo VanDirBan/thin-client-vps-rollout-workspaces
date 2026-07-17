@@ -257,13 +257,16 @@ It does:
 
 - reads `/etc/workmon-collect/hosts`;
 - connects to each worker over SSH;
+- checks reachability, worker hostname, and remote `*.age` count in one SSH probe;
 - pulls only `*.age` files from `/var/lib/workmon/spool` via `rsync`;
 - removes source files only after successful transfer with `--remove-source-files`;
+- shows live TTY progress for pull/upload phases while keeping non-TTY logs clean;
 - decrypts locally with the single admin-side age private key;
 - checks that decrypted output is a valid PNG;
-- uploads plaintext PNGs to the SMB share;
+- uploads plaintext PNGs to the SMB share under `<output>/<YYYY-MM-DD>/<asset>/`;
 - writes via `*.partial` and verifies size before considering upload successful;
 - keeps failed files in staging for retry;
+- prints a per-host final summary;
 - prevents overlapping real runs with a lock.
 
 It is manual-only: no systemd timer is installed by the current version.
@@ -414,7 +417,7 @@ bash ~/xfce-win10.sh
 If SSH collection access has been set up, from the admin laptop run:
 
 ```bash
-sudo scripts/admin/copy_key.sh <worker-ip-or-host>
+sudo scripts/admin/copy_key.sh <worker-ip>
 ```
 
 Then on the worker, start or restart capture:

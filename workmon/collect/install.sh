@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# workmon-collect 0.1.2 installer (admin laptop, Debian 13).
+# workmon-collect 0.1.3 installer (admin laptop, Debian 13).
 # Pulls encrypted screenshots from workers, decrypts locally, pushes to SMB.
 # Manual run only (no systemd units installed).
 
@@ -77,7 +77,7 @@ fi
 if [[ ! -f /etc/workmon-collect/collect.conf ]]; then
   echo "Creating default /etc/workmon-collect/collect.conf"
   write_file /etc/workmon-collect/collect.conf 0600 root root <<'CONF'
-# workmon-collect 0.1.2 configuration (admin laptop).
+# workmon-collect 0.1.3 configuration (admin laptop).
 
 HOSTS_FILE=/etc/workmon-collect/hosts
 
@@ -94,7 +94,7 @@ SSH_EXTRA_OPTS=
 RSYNC_IO_TIMEOUT_SECONDS=120
 RSYNC_TIMEOUT_SECONDS=1800
 
-# --- Locally on the admin laptop ---
+# --- Local paths on the admin laptop ---
 # The ONLY decryption private key. Keep it only here.
 PRIVATE_KEY_FILE=/etc/workmon-collect/private.key
 STAGING_DIR=/var/lib/workmon-collect/staging
@@ -122,10 +122,10 @@ if [[ ! -f /etc/workmon-collect/hosts ]]; then
   echo "Creating template /etc/workmon-collect/hosts"
   write_file /etc/workmon-collect/hosts 0600 root root <<'HOSTS'
 # One worker per line: <host_or_wg_ip> [asset_id]
-# asset_id is OPTIONAL. If not set — the receiving folder's name is taken from the
+# asset_id is OPTIONAL. If not set — the receiving folder name is taken from the
 # worker's own hostname (short name, `hostname -s`), which you make unique per
 # user during hardware provisioning. The second column is only needed to
-# forcibly override the name.
+# force an override.
 # Example (just WG addresses, names will come from the workers' hostnames):
 # 10.10.0.11
 # 10.10.0.12
@@ -143,11 +143,11 @@ fi
 #   * the value is read VERBATIM to the end of the line — WITH NO quotes;
 #   * write special characters (# $ , " etc.) as-is, no escaping/wrapping needed
 #     (the kernel reads this file, the shell never parses it);
-#   * if the password used to be quoted in an old shell script (e.g. "example,...#$3"),
+#   * if the password used to be quoted in an old shell script (for example "example,...#$3"),
 #     those quotes were shell escaping — do NOT put them in this file,
 #     or the quotes will become part of the password and mounting will fail.
-# Example for the 'write' account:
-#   username=write
+# Example credentials file:
+#   username=CHANGE_ME
 #   password=CHANGE_ME_WITH_SPECIAL_CHARS#$3
 #   domain=WORKGROUP
 # The file must be root:root 0600 (set automatically below).
@@ -160,7 +160,7 @@ domain=WORKGROUP
 CRED
 fi
 
-# SSH key for collection: generate it if it doesn't exist (private — kept only here).
+# SSH key for collection: generate it if it does not exist (private key stays only here).
 if [[ ! -f /etc/workmon-collect/id_collect ]]; then
   if [[ "${DRY_RUN}" == "true" ]]; then
     echo "[dry-run] ssh-keygen -t ed25519 -N '' -C workmon-collect -f /etc/workmon-collect/id_collect"
@@ -201,7 +201,7 @@ workmon-collect installed. Manual run only:
   sudo workmon-collect --dry-run     # check reachability, names, and what would be pulled
   sudo workmon-collect               # fetch, decrypt, upload to the share
   sudo workmon-collect --host 10.10.0.11   # only one host
-  sudo workmon-collect --no-remove   # don't delete source files on the workers (diagnostics)
+  sudo workmon-collect --no-remove   # do not delete source files on workers (diagnostics)
 
 Before first real run:
   1) put the age private key at /etc/workmon-collect/private.key (chmod 600),
