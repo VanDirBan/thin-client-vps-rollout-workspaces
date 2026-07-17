@@ -61,15 +61,22 @@ This repository is currently the baseline implementation. It is expected to evol
 
 ```text
 .
+├── docs/
+│   └── vps-provision-installer.md      # Admin-laptop VPS rollout runbook
 ├── env/
 │   ├── local-provision.env.example     # Example env for thin-client provisioning
-│   └── vps-provision.env.example       # Example env for VPS provisioning
+│   └── vps-provision.env.example       # Example env for VPS provisioning/launcher
 ├── scripts/
 │   ├── local-provision.sh              # Physical laptop/thin-client rollout
 │   ├── vps-provision.sh                # VPS desktop rollout
 │   ├── xfce-win10.sh                   # User-session XFCE Windows-like look
 │   ├── admin/
-│   │   └── copy_key.sh                 # Copy WorkMon age public key to a worker
+│   │   ├── copy_key.sh                 # Copy WorkMon age public key to a worker
+│   │   ├── copy_key_launcher.sh        # Interactive wrapper for copy_key.sh
+│   │   ├── vps-provision-launcher.sh   # Interactive admin-laptop VPS rollout wrapper
+│   │   ├── vps-provision-launcher.desktop
+│   │   ├── WorkMon-copy-public-key.desktop
+│   │   └── workmon-hosts.desktop
 │   └── workmon-agent-0.4.0/            # Worker-side screenshot capture agent
 │       ├── capture.py
 │       ├── common.py
@@ -115,13 +122,33 @@ Important notes:
 - It handles stuck NoMachine installer/subscription processes from a previous run.
 - It verifies the downloaded NoMachine `.deb`, because the NoMachine download server may return an HTML page with HTTP 200 for a nonexistent version.
 - It treats the VPS as a WireGuard client of an existing WG network: it always generates `/etc/wireguard/vps_private.key` and `/etc/wireguard/vps_public.key`, and writes/starts `wg0` only when `WG_SERVER_PUBKEY` and `WG_SERVER_ENDPOINT` are set.
+- The default sanitized VPS tunnel address is `10.8.0.101/24`; adjust `WG_ADDRESS` per VPS and keep each address unique.
 - The WireGuard server-side peer still has to be added outside this script.
+- The LightDM display step enables autologin for the worker user so NoMachine reconnects enter the XFCE desktop without a greeter password prompt.
 - It does **not** configure the firewall yet. After the first rollout, NoMachine may listen on port `4000` on the public interface until you close it manually.
 - The Multilogin `.deb` is intentionally not committed. Put it next to `scripts/vps-provision.sh` before running:
 
 ```text
 scripts/desktop-multiloginx-ubuntu-24.04-amd64.deb
 ```
+
+### `scripts/admin/vps-provision-launcher.sh`
+
+Interactive admin-laptop wrapper for routine VPS rollout.
+
+It:
+
+- finds the provisioner in the repository layout or in a flat exported installer directory;
+- loads optional local `.env.vps-provision` values;
+- asks for the new VPS public IP, WireGuard last octet, and timezone;
+- prompts for initial user passwords if they are not already set locally;
+- copies the provisioner and Multilogin `.deb` to `/root/` on the VPS;
+- runs the provisioner over SSH with the selected values passed as environment variables;
+- optionally copies `xfce-win10.sh` to the worker user's desktop.
+
+The desktop shortcut `scripts/admin/vps-provision-launcher.desktop` expects to live next to the launcher script.
+
+More operational detail is in `docs/vps-provision-installer.md`.
 
 ### `scripts/local-provision.sh`
 
@@ -252,14 +279,18 @@ Exit codes:
 Small admin-side helper for copying the shared WorkMon `age` public key from the admin laptop to a worker:
 
 ```bash
-sudo scripts/admin/copy_key.sh <worker-ip-or-host>
+sudo scripts/admin/copy_key.sh <worker-ip>
 ```
+
+It validates the IPv4 address, trims accidental whitespace, and forces SSH to use only the collection key with `IdentitiesOnly=yes` to avoid `MaxAuthTries` failures from unrelated ssh-agent keys.
 
 It uses:
 
 - SSH private key: `/etc/workmon-collect/id_collect`
 - age public recipient: `/etc/workmon-collect/public.key`
 - destination: `/etc/workmon/public.key` on the worker
+
+`copy_key_launcher.sh` is an interactive desktop-friendly wrapper, and `WorkMon-copy-public-key.desktop` expects to live next to it. `workmon-hosts.desktop` opens `/etc/workmon-collect/hosts` for editing on the admin laptop.
 
 Do not confuse the two key types:
 
@@ -279,7 +310,13 @@ chmod 600 .env.vps-provision
 
 Edit `.env.vps-provision` and set real initial passwords, package pins, and WireGuard values when available.
 
-Run the provisioner with environment preserved through sudo:
+Run either the interactive launcher:
+
+```bash
+bash scripts/admin/vps-provision-launcher.sh
+```
+
+or run the provisioner manually with environment preserved through sudo:
 
 ```bash
 set -a
@@ -527,6 +564,8 @@ bash -n scripts/local-provision.sh
 bash -n scripts/vps-provision.sh
 bash -n scripts/xfce-win10.sh
 bash -n scripts/admin/copy_key.sh
+bash -n scripts/admin/copy_key_launcher.sh
+bash -n scripts/admin/vps-provision-launcher.sh
 bash -n scripts/workmon-agent-0.4.0/install.sh
 bash -n scripts/workmon-agent-0.4.0/uninstall.sh
 bash -n workmon/collect/install.sh

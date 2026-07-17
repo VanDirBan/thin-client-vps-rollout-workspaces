@@ -49,7 +49,7 @@ LOCALES=("en_US.UTF-8" "ru_RU.UTF-8")
 # WG_SERVER_PUBKEY and WG_SERVER_ENDPOINT are filled in. While empty, the step
 # is limited to generating keys and printing a hint. Once filled in → rerun the step:
 #   sudo bash vps-provision.sh wireguard
-WG_ADDRESS="${WG_ADDRESS:-10.8.0.2/24}"          # this VPS's address inside the tunnel network
+WG_ADDRESS="${WG_ADDRESS:-10.8.0.101/24}"          # this VPS's address inside the tunnel network
 WG_SERVER_PUBKEY="${WG_SERVER_PUBKEY:-}"               # the WG server's public key
 WG_SERVER_ENDPOINT="${WG_SERVER_ENDPOINT:-}"             # server's host:port, e.g. "203.0.113.10:51820"
 WG_ALLOWED_IPS="${WG_ALLOWED_IPS:-10.8.0.0/24}"      # split-tunnel: only the tunnel subnet
@@ -514,8 +514,8 @@ step_display() {
 user-session=xfce
 greeter-session=lightdm-gtk-greeter
 # autologin for the work user (no password prompt in the greeter on reconnect):
-#autologin-user=${WORK_USER}
-#autologin-session=xfce
+autologin-user=${WORK_USER}
+autologin-session=xfce
 EOF
 
     # .xsession with a MANDATORY dbus bus — otherwise xfce4-session/xfconf/polkit crash

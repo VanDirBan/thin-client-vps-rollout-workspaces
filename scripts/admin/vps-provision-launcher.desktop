@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=VPS rollout
+Comment=Interactive VPS rollout wrapper for admins
+Icon=utilities-terminal
+Terminal=true
+StartupNotify=false
+Categories=System;
+Exec=bash -c "exec bash \"\$(dirname \"\$1\")/vps-provision-launcher.sh\"" _ %k

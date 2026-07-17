@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=WorkMon — worker hosts
+Comment=Edit /etc/workmon-collect/hosts with sudo nano
+Icon=utilities-terminal
+Terminal=true
+StartupNotify=false
+Categories=System;
+Exec=bash -c "sudo nano /etc/workmon-collect/hosts || { printf 'Launch failed (sudo or nano unavailable?)'; sleep 5; }"

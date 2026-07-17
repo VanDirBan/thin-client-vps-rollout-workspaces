@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=WorkMon — send public.key
+Comment=Interactively send WorkMon public.key to a worker laptop
+Icon=utilities-terminal
+Terminal=true
+StartupNotify=false
+Categories=System;
+Exec=bash -c "exec bash \"\$(dirname \"\$1\")/copy_key_launcher.sh\"" _ %k
