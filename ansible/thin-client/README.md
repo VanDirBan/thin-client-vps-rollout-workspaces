@@ -97,7 +97,7 @@ All behavior is preserved: the tunnel is not brought up during the run, password
 
 Minor differences: apt sources are now laid down as a whole file (declaratively) instead of an awk edit — check `roles/base/templates/debian.sources.j2` if you use non-standard mirrors. Backups of edits are made by Ansible itself (`backup: true`, i.e. timestamped copies next to the file) instead of a single `.orig`. The NoMachine shortcut icon is set as `Icon=nxplayer` instead of a `find` lookup — if the icon doesn't resolve, put an explicit path in `roles/svc_desktop/files/nomachine.desktop`. There's no more `/var/log/local-provision.log`: the full report is printed by Ansible itself on the admin laptop (enable `log_path` in `ansible.cfg` if you want a file).
 
-`xfce-win10.sh` is still consumed separately from the bash-side project for now. If you want Ansible to copy it too, place a reviewed copy in `roles/svc_desktop/files/xfce-win10.sh` and the existing task will start copying it to the user's desktop. The `workmon` role is a stub for the future agent.
+`xfce-win10.sh` is included in `roles/svc_desktop/files/xfce-win10.sh` and copied to the service user's Desktop by the `svc_desktop` role. It is still applied later by the user inside a live XFCE session, not executed by Ansible during provisioning. The `workmon` role is a stub for the future agent.
 
 Careful with full-tunnel: as before, if the peer isn't added on the VPS, after reboot the machine will bring the tunnel up "to nowhere" and go offline — Ansible won't be able to reach it either. The order in the summary (`post_tasks`) is mandatory.
 

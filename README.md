@@ -148,7 +148,7 @@ It currently maps the bash `scripts/local-provision.sh` flow into roles:
 - `wireguard` — client keys, `wg0.conf`, NetworkManager exclusion, watchdog timer;
 - `nomachine` — NoMachine package install and `node.cfg` tuning;
 - `x11vnc` — fallback VNC service bound to the WireGuard interface;
-- `svc_desktop` — service-user Desktop/autostart/power/lock/NoMachine shortcut settings;
+- `svc_desktop` — service-user Desktop/autostart/power/lock/NoMachine shortcut settings and `xfce-win10.sh` placement;
 - `workmon` — stub for a later native Ansible migration of the worker agent.
 
 This is intentionally separate from the approved script rollout path. Use it for learning, review, dry-runs, and gradual migration rather than as the only operational source of truth.

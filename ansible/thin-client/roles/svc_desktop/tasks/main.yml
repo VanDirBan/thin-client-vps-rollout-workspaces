@@ -125,12 +125,11 @@
     mode: '0644'
 
 # xfce-win10.sh is applied LATER, by the user, in a live XFCE session.
-# This task fires once you drop the file into roles/svc_desktop/files/.
-- name: Copy xfce-win10.sh to the desktop (if the file was added to the role)
+# The playbook only places the reviewed helper on the service user's Desktop.
+- name: Copy xfce-win10.sh to the desktop
   ansible.builtin.copy:
     src: xfce-win10.sh
     dest: "{{ svc_home }}/Desktop/xfce-win10.sh"
     owner: "{{ svc_user }}"
     group: "{{ svc_user }}"
     mode: '0755'
-  when: lookup('ansible.builtin.fileglob', role_path ~ '/files/xfce-win10.sh') | length > 0
