@@ -1,0 +1,4 @@
+---
+- name: Restart nxserver
+  ansible.builtin.command: /usr/NX/bin/nxserver --restart
+  failed_when: false

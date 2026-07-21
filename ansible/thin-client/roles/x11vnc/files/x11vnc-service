@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+CONFIG_FILE="/etc/default/x11vnc"
+[ -r "$CONFIG_FILE" ] || { echo "No config: $CONFIG_FILE" >&2; exit 1; }
+# shellcheck disable=SC1090,SC1091
+source "$CONFIG_FILE"
+
+# IPv4 on the tunnel interface. No address = tunnel not up => exit 1, and
+# systemd (Restart=always) tries again in 5s. NO fallback to 0.0.0.0: better
+# not to listen at all than to listen on the outside.
+bind_ip="$(ip -4 -o addr show dev "$INTERFACE" scope global 2>/dev/null \
+    | awk 'NR == 1 { split($4, a, "/"); print a[1] }')"
+if [ -z "$bind_ip" ]; then
+    echo "No IPv4 on $INTERFACE (tunnel not up?) — retry via systemd" >&2
+    exit 1
+fi
+
+# FD_XDM=1 + -auth guess: attach both to the lightdm greeter (nobody logged in)
+# and to the user session after login. -forever: don't die when the client disconnects.
+exec /usr/bin/x11vnc \
+    -env FD_XDM=1 \
+    -auth guess \
+    -display "$DISPLAY_NUMBER" \
+    -forever \
+    -shared \
+    -repeat \
+    -nolookup \
+    -rfbauth "$PASS_FILE" \
+    -rfbport "$PORT" \
+    -listen "$bind_ip" \
+    -no6

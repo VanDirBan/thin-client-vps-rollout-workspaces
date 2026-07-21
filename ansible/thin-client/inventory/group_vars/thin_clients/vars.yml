@@ -1,0 +1,42 @@
+# Common variables for the whole thin_clients group — the equivalent of the
+# CONFIG block from local-provision.sh. Per-machine values (wg_client_addr)
+# live in host_vars/.
+---
+# --- Users ---
+admin_user: adams               # existing user to grant sudo
+svc_user: smm                   # service user, no sudo
+svc_home: "/home/{{ svc_user }}"
+admin_group: sudo               # group for "semi-secret" files (WG configs/keys)
+
+# Secrets come from vault.yml (encrypted)
+svc_user_password: "{{ vault_svc_user_password }}"
+x11vnc_password: "{{ vault_x11vnc_password }}"
+
+# --- SSH: collector's public key (workmon-collect) for root ---
+collect_pubkey: 'ssh-ed25519 CHANGE_ME_COLLECTOR_PUBLIC_KEY workmon-collect'
+
+# --- WireGuard (full-tunnel via VPS) ---
+wg_iface: wg0
+wg_server_pubkey: 'CHANGE_ME_WIREGUARD_SERVER_PUBLIC_KEY'
+wg_endpoint: 'vpn.example.com:51820'
+wg_allowed: '0.0.0.0/0, ::/0'
+wg_keepalive: 25
+wg_autostart: true              # enable units on boot (we do NOT bring the tunnel up in this run)
+wg_watchdog_max_age: 180        # seconds without a handshake => watchdog recreates the tunnel
+
+# --- NoMachine (keep the same version as on the VPS) ---
+nomachine_branch: '9.7'
+nomachine_version: '9.7.3'
+nomachine_build: '1'
+nomachine_md5: '8af5efe7b8ad3872a4681c4acf551b62'
+nomachine_url: "https://download.nomachine.com/download/{{ nomachine_branch }}/Linux/nomachine_{{ nomachine_version }}_{{ nomachine_build }}_amd64.deb"
+
+# --- x11vnc: backup access to the physical screen, only via wg0 ---
+x11vnc_enable: true
+x11vnc_port: 5900
+x11vnc_display: ':0'
+x11vnc_pass_file: /etc/x11vnc.pass
+
+# --- Windows-10 theme (B00merang): pinned to specific commits ---
+win10_theme_commit: '3a4116603b66a9adcb78f3987d7ea6f01de1cbce'
+win10_icons_commit: '9f199c6b7c6050f36d0d15aaa6e9f4847e8b9066'

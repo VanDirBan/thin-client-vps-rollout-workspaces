@@ -19,6 +19,10 @@ id_rsa*
 id_ed25519*
 secrets/
 private/
+.vault_pass
+ansible/**/inventory/group_vars/**/vault.yml
+ansible/**/inventory/group_vars/**/vault*.yml
+!ansible/**/inventory/group_vars/**/*.example
 
 # Runtime data, screenshots, encrypted exports, logs
 screenshots/

@@ -1,0 +1,72 @@
+# Main playbook. Run against the whole fleet:
+#   ansible-playbook site.yml -K --ask-vault-pass
+# A single machine:              --limit tc-05
+# Selected roles only (like ONLY= in bash): --tags wireguard,x11vnc
+# Dry run without changes:       --check --diff
+---
+- name: Provision thin clients (equivalent of local-provision.sh v2.2)
+  hosts: thin_clients
+  become: true
+  gather_facts: false
+
+  pre_tasks:
+    # Public repository safety: real values live in ignored vault.yml / local edits.
+    - name: Pre-check — required secrets and site values were replaced
+      ansible.builtin.assert:
+        that:
+          - vault_svc_user_password | default('') | length > 0
+          - vault_svc_user_password | default('') != 'CHANGE_ME_STRONG_PASSWORD'
+          - vault_x11vnc_password | default('') | length == 8
+          - vault_x11vnc_password | default('') != 'CHANGE12'
+          - collect_pubkey | default('') is match('^ssh-(ed25519|rsa|ecdsa) ')
+          - collect_pubkey | default('') != 'ssh-ed25519 CHANGE_ME_COLLECTOR_PUBLIC_KEY workmon-collect'
+          - wg_server_pubkey | default('') != 'CHANGE_ME_WIREGUARD_SERVER_PUBLIC_KEY'
+          - wg_endpoint | default('') != 'vpn.example.com:51820'
+          - ansible_host | default('') != '192.0.2.55'
+        fail_msg: >-
+          Replace the public placeholders before running: copy
+          inventory/group_vars/thin_clients/vault.yml.example to ignored vault.yml,
+          set real passwords there, and set collect_pubkey, wg_server_pubkey,
+          wg_endpoint, inventory hosts, and per-host wg_client_addr for your site.
+      tags: [always]
+
+    # Equivalent of the bash pre-checks: validate inputs BEFORE changing anything.
+    - name: Pre-check — hostname and tunnel address are valid
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname is match('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$')
+          - wg_client_addr is defined
+          - wg_client_addr is match('^\d+\.\d+\.\d+\.\d+/\d+$')
+        fail_msg: >-
+          Invalid per-machine data: the inventory hostname must be
+          a-z/0-9/hyphens, and wg_client_addr (host_vars/<host>.yml) must be
+          CIDR like 10.8.0.5/24, unique for each machine in the fleet.
+      tags: [always]
+
+  roles:
+    - { role: base,        tags: [base] }         # hostname, hosts, ssh keys, grub, apt, upgrade
+    - { role: users,       tags: [users] }        # sudo for adams, service user smm, collector key
+    - { role: desktop,     tags: [desktop] }      # XFCE, Win10 theme, lightdm
+    - { role: audio,       tags: [audio] }        # PipeWire + groups for smm
+    - { role: wireguard,   tags: [wireguard] }    # keys, wg0.conf, watchdog (tunnel NOT brought up)
+    - { role: nomachine,   tags: [nomachine] }    # .deb + node.cfg
+    - { role: x11vnc,      tags: [x11vnc] }       # backup VNC to the physical screen
+    - { role: svc_desktop, tags: [svc_desktop] }  # power/lock/shortcuts for smm
+    - { role: workmon,     tags: [workmon] }      # TODO: agent to be added later
+
+  post_tasks:
+    # Equivalent of step_summary: the key thing is the client public key for [Peer] on the VPS.
+    - name: Summary
+      ansible.builtin.debug:
+        msg:
+          - "Hostname: {{ inventory_hostname }}"
+          - ">>> THIS CLIENT'S PUBLIC KEY (add it as a [Peer] on the VPS):"
+          - "    {{ wg_client_public_key }}"
+          - "    (on the VPS: AllowedIPs = {{ wg_client_addr | split('/') | first }}/32)"
+          - "Next: 1) add peer on VPS  2) on the laptop: sudo wg-quick up {{ wg_iface }}"
+          - "      3) verify: ping 10.8.0.1 and curl ifconfig.me (VPS IP)"
+          - "      4) audio tunnel per your .md  5) NoMachine -> host 10.8.0.1"
+          - "      6) as {{ svc_user }} in XFCE: bash ~/Desktop/xfce-win10.sh"
+          - "A reboot is recommended (firmware/microcode, lightdm): sudo reboot"
+      when: wg_client_public_key is defined
+      tags: [always]

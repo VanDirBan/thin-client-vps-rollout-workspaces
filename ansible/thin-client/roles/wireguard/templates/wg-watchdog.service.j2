@@ -1,0 +1,9 @@
+[Unit]
+Description=WireGuard watchdog (reconnect {{ wg_iface }})
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=WG_IFACE={{ wg_iface }} WG_MAX_AGE={{ wg_watchdog_max_age }}
+ExecStart=/usr/local/sbin/wg-watchdog.sh

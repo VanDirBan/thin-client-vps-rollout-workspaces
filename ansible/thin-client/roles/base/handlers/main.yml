@@ -1,0 +1,11 @@
+# Handlers run ONCE at the end of the run, and only if at least one task with
+# notify actually changed something. The equivalent of "one restart for all edits".
+---
+- name: Restart ssh
+  ansible.builtin.systemd:
+    name: ssh
+    state: restarted
+  failed_when: false      # on some systems the unit is named sshd — don't fail the run
+
+- name: Update grub
+  ansible.builtin.command: update-grub

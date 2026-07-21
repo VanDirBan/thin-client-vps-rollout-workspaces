@@ -1,0 +1,19 @@
+# Role audio: PipeWire + pulse-shim + client utilities (for the .md procedure).
+# The tunnel modules themselves — done manually per your .md, AFTER WG is up.
+---
+- name: PipeWire + pipewire-pulse + utilities + pavucontrol
+  ansible.builtin.apt:
+    name:
+      - pipewire
+      - pipewire-pulse
+      - pipewire-audio
+      - wireplumber
+      - pulseaudio-utils
+      - pavucontrol
+    state: present
+
+- name: Service user into audio,video groups (it runs the audio tunnel in XFCE)
+  ansible.builtin.user:
+    name: "{{ svc_user }}"
+    groups: audio,video
+    append: true

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=NoMachine
+Comment=Connect to a remote desktop
+Exec=/usr/NX/bin/nxplayer
+Icon=nxplayer
+Terminal=false
+Categories=Network;RemoteAccess;

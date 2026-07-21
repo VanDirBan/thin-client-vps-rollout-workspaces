@@ -1,0 +1,51 @@
+# Role nomachine: full package (client + server) + node.cfg configuration.
+---
+- name: Check whether NoMachine is installed
+  ansible.builtin.command: dpkg-query -W nomachine
+  register: nm_check
+  changed_when: false
+  failed_when: false
+
+# get_url's checksum covers BOTH problems from the bash version at once:
+# "server returned 200+HTML instead of a .deb" and "a new build came out" —
+# in both cases the MD5 won't match and the task fails with a clear error (die logic).
+- name: Download the .deb (with MD5 verification)
+  ansible.builtin.get_url:
+    url: "{{ nomachine_url }}"
+    dest: /tmp/nomachine.deb
+    checksum: "md5:{{ nomachine_md5 }}"
+    headers:
+      User-Agent: Mozilla/5.0
+    mode: '0644'
+  when: nm_check.rc != 0
+
+- name: Install NoMachine
+  ansible.builtin.apt:
+    deb: /tmp/nomachine.deb
+  when: nm_check.rc != 0
+
+- name: Remove the temporary .deb
+  ansible.builtin.file:
+    path: /tmp/nomachine.deb
+    state: absent
+
+- name: Check for node.cfg
+  ansible.builtin.stat:
+    path: /usr/NX/etc/node.cfg
+  register: nodecfg
+
+# NoMachine ships defaults COMMENTED OUT (#Key 1) — regexp '^#?Key\s'
+# uncomments/replaces, and lineinfile appends if the key is missing entirely.
+# Equivalent of set_nodecfg. One notify for all edits = one nxserver restart.
+- name: node.cfg — XFCE session + quiet mode
+  ansible.builtin.lineinfile:
+    path: /usr/NX/etc/node.cfg
+    regexp: '^#?{{ item.key }}\s'
+    line: "{{ item.key }} {{ item.value }}"
+    backup: true
+  loop:
+    - { key: DefaultDesktopCommand, value: '"/usr/bin/startxfce4"' }  # otherwise a grey screen on incoming connections
+    - { key: ShowDesktopViewed, value: '0' }    # no "desktop is being viewed" banner
+    - { key: EnableSoundAlert, value: '0' }     # no sound alert on connect
+  when: nodecfg.stat.exists
+  notify: Restart nxserver

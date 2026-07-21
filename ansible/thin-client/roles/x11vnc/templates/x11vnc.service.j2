@@ -1,0 +1,16 @@
+[Unit]
+Description=x11vnc on the physical X display (only {{ wg_iface }})
+Documentation=man:x11vnc(1)
+Wants=network-online.target
+After=network-online.target display-manager.service wg-quick@{{ wg_iface }}.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/x11vnc-service
+Restart=always
+RestartSec=5s
+TimeoutStopSec=10s
+
+[Install]
+WantedBy=graphical.target

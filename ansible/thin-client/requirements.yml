@@ -1,0 +1,5 @@
+# External collections. Install once:
+#   ansible-galaxy collection install -r requirements.yml
+---
+collections:
+  - name: ansible.posix   # authorized_key module

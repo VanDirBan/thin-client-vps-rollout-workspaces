@@ -1,0 +1,5 @@
+# Per-machine variables for host tc-05.
+# Unique tunnel address — the equivalent of the mandatory WG_CLIENT_ADDR
+# from the bash script. One file per machine under host_vars/.
+---
+wg_client_addr: 10.8.0.5/24

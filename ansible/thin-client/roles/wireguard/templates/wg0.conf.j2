@@ -1,0 +1,9 @@
+[Interface]
+PrivateKey = {{ wg_client_private_key }}
+Address = {{ wg_client_addr }}
+
+[Peer]
+PublicKey = {{ wg_server_pubkey }}
+Endpoint = {{ wg_endpoint }}
+AllowedIPs = {{ wg_allowed }}
+PersistentKeepalive = {{ wg_keepalive }}

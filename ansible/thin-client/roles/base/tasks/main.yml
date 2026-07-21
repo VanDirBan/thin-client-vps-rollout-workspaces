@@ -1,0 +1,80 @@
+# Role base: hostname, /etc/hosts, SSH host keys, GRUB, apt sources, upgrade.
+# Combines bash steps: hostname, ssh_hostkeys, grub, apt_sources, upgrade.
+---
+- name: Set hostname (= inventory hostname)
+  ansible.builtin.hostname:
+    name: "{{ inventory_hostname }}"
+
+- name: /etc/hosts — 127.0.1.1 entry (otherwise sudo/X complain about name resolution)
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '^127\.0\.1\.1\s'
+    line: "127.0.1.1\t{{ inventory_hostname }}"
+
+# --- SSH host keys: on these machines they get wiped for some reason ---
+- name: Check for the ed25519 host key
+  ansible.builtin.stat:
+    path: /etc/ssh/ssh_host_ed25519_key
+  register: hostkey
+
+- name: Restore missing host keys (ssh-keygen -A leaves existing ones alone)
+  ansible.builtin.command: ssh-keygen -A
+  when: not hostkey.stat.exists
+  notify: Restart ssh
+
+# --- GRUB: no pause and no menu at boot ---
+# lineinfile with regexp '^#?KEY=' is the same trick as set_grubcfg in bash:
+# uncomment/replace, and if the key is missing — append it at the end.
+- name: GRUB — TIMEOUT=0, hidden, RECORDFAIL=0
+  ansible.builtin.lineinfile:
+    path: /etc/default/grub
+    regexp: '^#?{{ item.key }}='
+    line: "{{ item.key }}={{ item.value }}"
+    backup: true          # like ensure_backup (Ansible makes a timestamped copy)
+  loop:
+    - { key: GRUB_TIMEOUT, value: '0' }
+    - { key: GRUB_TIMEOUT_STYLE, value: 'hidden' }
+    - { key: GRUB_RECORDFAIL_TIMEOUT, value: '0' }
+  notify: Update grub
+
+# --- apt sources: declaratively, as a whole file ---
+# Difference from the bash version: there awk appended components to the
+# existing file; here we lay down the DESIRED state in full. This is the main
+# mindset shift in Ansible: describe "how it should be", not "what to change".
+- name: apt sources deb822 — main contrib non-free non-free-firmware
+  ansible.builtin.template:
+    src: debian.sources.j2
+    dest: /etc/apt/sources.list.d/debian.sources
+    mode: '0644'
+    backup: true
+
+- name: Upgrade the system (full-upgrade)
+  ansible.builtin.apt:
+    update_cache: true
+    upgrade: full
+
+- name: Firmware, AMD microcode, kernel headers, basic utilities
+  ansible.builtin.apt:
+    name:
+      - amd64-microcode
+      - firmware-linux-free
+      - firmware-misc-nonfree
+      - firmware-amd-graphics
+      - firmware-realtek
+      - linux-headers-amd64
+      - dkms
+      - curl
+      - wget
+      - gnupg
+      - ca-certificates
+      - apt-transport-https
+      - unzip
+      - htop
+    state: present
+
+- name: Networking — NetworkManager (Wi-Fi on the laptop + tray applet)
+  ansible.builtin.apt:
+    name:
+      - network-manager
+      - network-manager-gnome
+    state: present

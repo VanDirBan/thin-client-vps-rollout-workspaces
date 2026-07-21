@@ -1,0 +1,8 @@
+# Role workmon: install workmon-agent. A stub for now — the installer and
+# helper scripts will be added in the next migration step.
+# Plan: files/workmon-agent-<version>/ -> copy to the host -> command install.sh
+# (or, better, rewrite install.sh as native Ansible tasks).
+---
+- name: WorkMon agent — TODO
+  ansible.builtin.debug:
+    msg: "The workmon role is empty for now: workmon-agent installation will move here."

@@ -1,0 +1,45 @@
+# Role users: sudo for the admin, a service user without sudo, collector key for root.
+# Combines bash steps: users, collect_key.
+---
+- name: sudo package
+  ansible.builtin.apt:
+    name: sudo
+    state: present
+
+- name: Read /etc/passwd (who exists on the machine)
+  ansible.builtin.getent:
+    database: passwd
+
+- name: Grant sudo to the admin user (if it exists)
+  ansible.builtin.user:
+    name: "{{ admin_user }}"
+    groups: sudo
+    append: true            # ADD to the group, don't replace the others
+  when: admin_user in getent_passwd
+
+- name: Warn if the admin user is missing
+  ansible.builtin.debug:
+    msg: "WARNING: user {{ admin_user }} not found — sudo not granted"
+  when: admin_user not in getent_passwd
+
+# update_password: on_create — same logic as in bash: set the password only
+# when CREATING the user, so reruns don't clobber a manually changed password.
+- name: Service user (no sudo)
+  ansible.builtin.user:
+    name: "{{ svc_user }}"
+    shell: /bin/bash
+    create_home: true
+    password: "{{ svc_user_password | password_hash('sha512') }}"
+    update_password: on_create
+  no_log: true              # don't leak the hash/password into output and logs
+
+- name: Reminder about the default password
+  ansible.builtin.debug:
+    msg: "Password for {{ svc_user }} is the vault default (weak). Change it: passwd {{ svc_user }}"
+
+# The authorized_key module handles all the nuances from the bash version:
+# duplicates, trailing newline in the file, ~/.ssh permissions (root stays 700/600).
+- name: Collector public key (workmon-collect) into root's authorized_keys
+  ansible.posix.authorized_key:
+    user: root
+    key: "{{ collect_pubkey }}"

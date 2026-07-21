@@ -1,0 +1,10 @@
+[Unit]
+Description=Run WireGuard watchdog periodically
+
+[Timer]
+OnBootSec=20
+OnUnitActiveSec=30
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

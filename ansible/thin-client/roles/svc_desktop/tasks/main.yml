@@ -1,0 +1,136 @@
+# Role svc_desktop: everything per-user for the service user.
+# Combines bash steps: power, win10_script, nm_shortcut.
+# We don't use xfconf-query: during provisioning the user has no live session
+# (no xfconfd/dbus) — instead we drop ready-made perchannel XML that xfconfd
+# reads on first login.
+---
+- name: Check whether the user has a live session (xfconfd in memory)
+  ansible.builtin.command: pgrep -u {{ svc_user }} xfconfd
+  register: xfconfd_check
+  changed_when: false
+  failed_when: false
+
+- name: Warn about a live session
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: {{ svc_user }} currently has a live session — xfconfd will
+      overwrite our XML with its own on logout! Apply the settings in-session
+      via xfconf-query OR log the user out and rerun: --tags svc_desktop
+  when: xfconfd_check.rc == 0
+
+- name: Directories in the user's home
+  ansible.builtin.file:
+    path: "{{ svc_home }}/{{ item }}"
+    state: directory
+    owner: "{{ svc_user }}"
+    group: "{{ svc_user }}"
+    mode: '0755'
+  loop:
+    - .config
+    - .config/xfce4/xfconf/xfce-perchannel-xml
+    - .config/autostart
+    - .local/bin
+    - Desktop
+
+# force: false — create only if the file is MISSING (an existing entry takes
+# priority, xdg won't rewrite it). Protection against a localized desktop folder name:
+# pin XDG_DESKTOP_DIR=~/Desktop BEFORE first login under a Russian locale.
+- name: user-dirs.dirs — pin Desktop (only if not present yet)
+  ansible.builtin.copy:
+    src: user-dirs.dirs
+    dest: "{{ svc_home }}/.config/user-dirs.dirs"
+    owner: "{{ svc_user }}"
+    group: "{{ svc_user }}"
+    mode: '0644'
+    force: false
+
+# --- Power/locking: presentation-mode, DPMS off, lock disabled ---
+- name: perchannel XML — xfce4-power-manager and xfce4-screensaver
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "{{ svc_home }}/.config/xfce4/xfconf/xfce-perchannel-xml/{{ item }}"
+    owner: "{{ svc_user }}"
+    group: "{{ svc_user }}"
+    mode: '0644'
+  loop:
+    - xfce4-power-manager.xml
+    - xfce4-screensaver.xml
+
+# Hidden=true overrides /etc/xdg/autostart. We don't purge light-locker
+# globally — the admin user keeps their screen lock.
+- name: Disable light-locker per-user
+  ansible.builtin.copy:
+    src: light-locker.desktop
+    dest: "{{ svc_home }}/.config/autostart/light-locker.desktop"
+    owner: "{{ svc_user }}"
+    group: "{{ svc_user }}"
+    mode: '0644'
+
+- name: Safety net #2 — noblank.sh (xset on every login)
+  ansible.builtin.copy:
+    src: noblank.sh
+    dest: "{{ svc_home }}/.local/bin/noblank.sh"
+    owner: "{{ svc_user }}"
+    group: "{{ svc_user }}"
+    mode: '0755'
+
+- name: noblank autostart
+  ansible.builtin.template:
+    src: noblank.desktop.j2
+    dest: "{{ svc_home }}/.config/autostart/noblank.desktop"
+    owner: "{{ svc_user }}"
+    group: "{{ svc_user }}"
+    mode: '0644'
+
+- name: lightdm.conf.d directory
+  ansible.builtin.file:
+    path: /etc/lightdm/lightdm.conf.d
+    state: directory
+    mode: '0755'
+
+- name: Safety net #1 — lightdm X -s 0 -dpms (greeter never blanks either)
+  ansible.builtin.copy:
+    src: 20-noblank.conf
+    dest: /etc/lightdm/lightdm.conf.d/20-noblank.conf
+    mode: '0644'
+
+# --- NoMachine shortcut ---
+# We do NOT copy the system .desktop from /usr/share/applications — that's the
+# web-session MIME handler (NoDisplay=true), not a launcher. Our own clean
+# launcher points at nxplayer.
+- name: NoMachine shortcut on the desktop
+  ansible.builtin.copy:
+    src: nomachine.desktop
+    dest: "{{ svc_home }}/Desktop/nomachine.desktop"
+    owner: "{{ svc_user }}"
+    group: "{{ svc_user }}"
+    mode: '0755'
+
+# Marking it "trusted" needs a LIVE session (gvfs) — a one-shot autostart on
+# first login sets the sha256 checksum and deletes itself.
+- name: nm-trust-once.sh
+  ansible.builtin.copy:
+    src: nm-trust-once.sh
+    dest: "{{ svc_home }}/.local/bin/nm-trust-once.sh"
+    owner: "{{ svc_user }}"
+    group: "{{ svc_user }}"
+    mode: '0755'
+
+- name: One-shot autostart to mark the shortcut trusted
+  ansible.builtin.template:
+    src: nm-trust-once.desktop.j2
+    dest: "{{ svc_home }}/.config/autostart/nm-trust-once.desktop"
+    owner: "{{ svc_user }}"
+    group: "{{ svc_user }}"
+    mode: '0644'
+
+# xfce-win10.sh is applied LATER, by the user, in a live XFCE session.
+# This task fires once you drop the file into roles/svc_desktop/files/.
+- name: Copy xfce-win10.sh to the desktop (if the file was added to the role)
+  ansible.builtin.copy:
+    src: xfce-win10.sh
+    dest: "{{ svc_home }}/Desktop/xfce-win10.sh"
+    owner: "{{ svc_user }}"
+    group: "{{ svc_user }}"
+    mode: '0755'
+  when: lookup('ansible.builtin.fileglob', role_path ~ '/files/xfce-win10.sh') | length > 0

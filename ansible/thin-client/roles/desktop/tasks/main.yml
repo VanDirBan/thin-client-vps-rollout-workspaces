@@ -1,0 +1,94 @@
+# Role desktop: XFCE + Windows-10 theme (pinned to a commit) + lightdm as default.
+# Combines bash steps: desktop, install_win10_look.
+---
+- name: XFCE (desktop core)
+  ansible.builtin.apt:
+    name:
+      - xfce4
+      - xfconf
+      - dbus-x11
+      - dbus-user-session
+      - x11-xserver-utils
+    state: present
+
+- name: Packages required for the Windows-10 look
+  ansible.builtin.apt:
+    name:
+      - xfce4-whiskermenu-plugin   # "Start" button
+      - gtk2-engines-murrine       # renders the GTK2 part of the B00merang theme
+      - gvfs                       # Trash/removable media on the desktop
+      - gvfs-daemons
+      - fonts-noto
+      - fonts-noto-color-emoji
+      - fonts-liberation
+      - curl
+      - unzip
+    state: present
+
+# --- Windows-10 theme: download a PINNED commit so fleet machines provisioned
+# on different days get the same theme version.
+# block/rescue is the equivalent of "warn and carry on": a theme failure won't
+# fail the provisioning run.
+# creates: is like the bash check [ ! -d ... ]: if the directory already exists
+# the task is skipped => idempotent, no repeated downloads.
+- name: Windows-10 theme (best-effort)
+  block:
+    - name: Download and unpack theme and icons (B00merang, pinned to a commit)
+      ansible.builtin.unarchive:
+        src: "https://codeload.github.com/{{ item.repo }}/zip/{{ item.commit }}"
+        remote_src: true
+        dest: /tmp
+        creates: "{{ item.dest }}"
+      loop: &win10_items
+        - repo: B00merang-Project/Windows-10
+          commit: "{{ win10_theme_commit }}"
+          dest: /usr/share/themes/Windows-10
+        - repo: B00merang-Artwork/Windows-10
+          commit: "{{ win10_icons_commit }}"
+          dest: /usr/share/icons/Windows-10
+
+    # codeload unpacks into Windows-10-<sha> — move it into the system directory
+    # WITHOUT the suffix.
+    - name: Move into system directories
+      ansible.builtin.command:
+        cmd: mv "/tmp/Windows-10-{{ item.commit }}" "{{ item.dest }}"
+        creates: "{{ item.dest }}"
+      loop: *win10_items
+
+    - name: Update the icon cache
+      ansible.builtin.command: gtk-update-icon-cache -f /usr/share/icons/Windows-10
+      changed_when: false
+      failed_when: false
+  rescue:
+    - name: Warning
+      ansible.builtin.debug:
+        msg: "Failed to download the Windows-10 theme — clients will fall back to Arc/Papirus"
+
+# ignore_errors is like apt_try: a failure is a warning, not a stop.
+- name: Fallback themes (best-effort)
+  ansible.builtin.apt:
+    name:
+      - arc-theme
+      - papirus-icon-theme
+    state: present
+  ignore_errors: true
+
+- name: Desktop extras (best-effort)
+  ansible.builtin.apt:
+    name:
+      - xfce4-goodies
+      - xfce4-screensaver    # only if Win+L should actually lock
+    state: present
+  ignore_errors: true
+
+- name: lightdm — default display manager (no interactive dialog)
+  ansible.builtin.copy:
+    content: "/usr/sbin/lightdm\n"
+    dest: /etc/X11/default-display-manager
+    mode: '0644'
+
+- name: Enable lightdm on boot
+  ansible.builtin.systemd:
+    name: lightdm
+    enabled: true
+  failed_when: false

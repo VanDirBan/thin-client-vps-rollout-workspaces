@@ -9,11 +9,39 @@ The project has two connected parts:
 
 This repository is currently the baseline implementation. It is expected to evolve: firewall setup, WireGuard server-side peer policy, operational polish, and extra automation are still planned.
 
+## Ansible transition track
+
+A parallel Ansible implementation now lives in `ansible/thin-client/`.
+
+Why it is here:
+
+- The current approved rollout path remains the familiar shell-script workflow under `scripts/`. That keeps the project acceptable for leadership that wants known, simple deployment mechanics.
+- The Ansible tree is the modernization/learning path: the same thin-client provisioning logic is being translated into declarative roles, inventory, group variables, host variables, handlers, templates, and Vault-managed secrets.
+- Both paths should coexist for now. Scripts stay the operational baseline; Ansible is the controlled migration track where each script step can be mapped to an idempotent role and tested before it becomes the default.
+
+How to read it:
+
+- `ansible/thin-client/site.yml` is the main playbook. It calls roles in the same rough order as `scripts/local-provision.sh`.
+- `ansible/thin-client/inventory/hosts.yml` lists target laptops; `host_vars/` stores per-machine values such as the WireGuard client address.
+- `ansible/thin-client/inventory/group_vars/thin_clients/vars.yml` stores shared non-secret settings.
+- `ansible/thin-client/inventory/group_vars/thin_clients/vault.yml.example` is a committed template only. Copy it to ignored `vault.yml`, replace placeholders, then encrypt it with Ansible Vault.
+- `ansible/thin-client/README.md` explains the Bash-to-Ansible mapping, setup, dry-run flow, selected-role runs, and current gaps.
+
+Typical first commands from the repository root:
+
+```bash
+cd ansible/thin-client
+ansible-galaxy collection install -r requirements.yml
+cp inventory/group_vars/thin_clients/vault.yml.example inventory/group_vars/thin_clients/vault.yml
+ansible-vault encrypt inventory/group_vars/thin_clients/vault.yml
+ansible-playbook site.yml -K --ask-vault-pass --check --diff --limit tc-05
+```
+
 ## Current status
 
 - Development-stage project, not a finished production distribution.
-- Source scripts and packages are imported, organized, and sanitized.
-- Real passwords, private keys, WireGuard keys, production SMB paths, screenshots, archives, and binary installers are intentionally not committed.
+- Source scripts, packages, and the first Ansible migration slice are imported, organized, and sanitized.
+- Real passwords, private keys, WireGuard keys, production SMB paths, screenshots, archives, Vault files, and binary installers are intentionally not committed.
 - Full firewall hardening is not implemented yet. Until it is added, treat externally reachable services, especially NoMachine, as requiring manual network restriction.
 
 ## Architecture overview
@@ -61,6 +89,13 @@ This repository is currently the baseline implementation. It is expected to evol
 
 ```text
 .
+├── ansible/
+│   └── thin-client/                    # First Ansible migration slice for physical thin-client rollout
+│       ├── site.yml                    # Main playbook, equivalent to ordered script steps
+│       ├── ansible.cfg
+│       ├── requirements.yml
+│       ├── inventory/                  # Fleet, group vars, host vars, Vault template
+│       └── roles/                      # base/users/desktop/audio/wireguard/nomachine/x11vnc/etc.
 ├── docs/
 │   ├── local-provision-admin-guide.md  # Physical laptop/thin-client rollout runbook
 │   └── vps-provision-installer.md      # Admin-laptop VPS rollout runbook
@@ -99,6 +134,24 @@ This repository is currently the baseline implementation. It is expected to evol
 ```
 
 ## Components
+
+### `ansible/thin-client/`
+
+First Ansible migration slice for physical thin-client provisioning.
+
+It currently maps the bash `scripts/local-provision.sh` flow into roles:
+
+- `base` — hostname, hosts entry, SSH host keys, GRUB, APT sources, upgrade, base networking packages;
+- `users` — admin sudo membership, service user, collector SSH public key;
+- `desktop` — XFCE, LightDM, Windows-like theme attempt and fallbacks;
+- `audio` — PipeWire/audio package setup;
+- `wireguard` — client keys, `wg0.conf`, NetworkManager exclusion, watchdog timer;
+- `nomachine` — NoMachine package install and `node.cfg` tuning;
+- `x11vnc` — fallback VNC service bound to the WireGuard interface;
+- `svc_desktop` — service-user Desktop/autostart/power/lock/NoMachine shortcut settings;
+- `workmon` — stub for a later native Ansible migration of the worker agent.
+
+This is intentionally separate from the approved script rollout path. Use it for learning, review, dry-runs, and gradual migration rather than as the only operational source of truth.
 
 ### `scripts/vps-provision.sh`
 

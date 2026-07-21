@@ -1,0 +1,11 @@
+# SECRETS TEMPLATE. Copy this file to ignored vault.yml, replace the
+# placeholders, then encrypt it before routine use:
+#   cp inventory/group_vars/thin_clients/vault.yml.example inventory/group_vars/thin_clients/vault.yml
+#   ansible-vault encrypt inventory/group_vars/thin_clients/vault.yml
+# Then run the playbook with: ansible-playbook site.yml -K --ask-vault-pass
+# View/edit the encrypted file: ansible-vault edit <file>
+# Convention: everything here is prefixed vault_, and the "plain" names in
+# vars.yml reference these — so a grep shows where each secret comes from.
+---
+vault_svc_user_password: 'CHANGE_ME_STRONG_PASSWORD'
+vault_x11vnc_password: 'CHANGE12'  # exactly 8 chars; replace before use

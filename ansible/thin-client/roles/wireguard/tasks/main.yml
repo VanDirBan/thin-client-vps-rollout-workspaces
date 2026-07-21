@@ -1,0 +1,122 @@
+# Role wireguard: install, client key pair, wg0.conf, watchdog.
+# Combines bash steps: wireguard, watchdog. The tunnel is NOT brought up
+# (full-tunnel: bringing it up before the peer exists on the VPS = no internet).
+---
+- name: WireGuard — packages
+  ansible.builtin.apt:
+    name:
+      - wireguard
+      - wireguard-tools
+    state: present
+
+- name: /etc/wireguard directory (root:sudo 750 — admin reads without su)
+  ansible.builtin.file:
+    path: /etc/wireguard
+    state: directory
+    owner: root
+    group: "{{ admin_group }}"
+    mode: '0750'
+
+# There's no ansible.builtin module for wg genkey — a rare case where shell is
+# genuinely the right tool. creates: gives idempotency: the key is generated
+# once and reused across reruns (like in bash).
+- name: Generate the client key pair (once)
+  ansible.builtin.shell: |
+    set -o pipefail
+    umask 027
+    wg genkey | tee /etc/wireguard/client_private.key | wg pubkey > /etc/wireguard/client_public.key
+  args:
+    creates: /etc/wireguard/client_private.key
+    executable: /bin/bash
+
+- name: Permissions on the key files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    owner: root
+    group: "{{ admin_group }}"
+    mode: '0640'
+  loop:
+    - /etc/wireguard/client_private.key
+    - /etc/wireguard/client_public.key
+
+# slurp reads the file FROM the remote machine (base64) — that's how the
+# private key reaches the template without leaving the host (unlike
+# lookup('file'), which reads from the control machine).
+- name: Read the private key
+  ansible.builtin.slurp:
+    src: /etc/wireguard/client_private.key
+  register: wg_priv
+  no_log: true
+
+- name: Read the public key (for the summary)
+  ansible.builtin.slurp:
+    src: /etc/wireguard/client_public.key
+  register: wg_pub
+
+- name: Store the keys as facts
+  ansible.builtin.set_fact:
+    wg_client_private_key: "{{ wg_priv.content | b64decode | trim }}"
+    wg_client_public_key: "{{ wg_pub.content | b64decode | trim }}"
+  no_log: true
+
+# The template is re-rendered every run (idempotent: no change = ok).
+# template creates the file with mode 0640 from the start — no window where
+# the key sits at 644.
+- name: wg0.conf from a template
+  ansible.builtin.template:
+    src: wg0.conf.j2
+    dest: "/etc/wireguard/{{ wg_iface }}.conf"
+    owner: root
+    group: "{{ admin_group }}"
+    mode: '0640'
+  no_log: true            # the diff would contain the private key
+
+- name: Exclude wg0 from NetworkManager control
+  ansible.builtin.copy:
+    content: |
+      [keyfile]
+      unmanaged-devices=interface-name:{{ wg_iface }}
+    dest: /etc/NetworkManager/conf.d/90-unmanaged-wireguard.conf
+    mode: '0644'
+
+# --- watchdog: the script is static (files/), parameters come via Environment= in the unit ---
+- name: wg-watchdog script
+  ansible.builtin.copy:
+    src: wg-watchdog.sh
+    dest: /usr/local/sbin/wg-watchdog.sh
+    mode: '0755'
+
+- name: wg-watchdog.service unit (parameters in Environment=)
+  ansible.builtin.template:
+    src: wg-watchdog.service.j2
+    dest: /etc/systemd/system/wg-watchdog.service
+    mode: '0644'
+  notify: Reload systemd
+
+- name: wg-watchdog.timer
+  ansible.builtin.copy:
+    src: wg-watchdog.timer
+    dest: /etc/systemd/system/wg-watchdog.timer
+    mode: '0644'
+  notify: Reload systemd
+
+# enabled without state: started — the units are ENABLED on boot, but we don't
+# touch the current session (bring the tunnel up manually once the peer is on the VPS).
+- name: Autostart wg-quick@ and watchdog on boot
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: true
+    daemon_reload: true
+  loop:
+    - "wg-quick@{{ wg_iface }}.service"
+    - wg-watchdog.timer
+  when: wg_autostart
+
+- name: Full-tunnel warning
+  ansible.builtin.debug:
+    msg: >-
+      Autostart is enabled: the tunnel will come up after reboot. Add the peer
+      on the VPS first, otherwise the full-tunnel goes "nowhere" and the machine
+      is left without internet. Rollback: systemctl disable --now
+      wg-quick@{{ wg_iface }} wg-watchdog.timer
+  when: wg_autostart

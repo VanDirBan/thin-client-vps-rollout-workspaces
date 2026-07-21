@@ -1,0 +1,66 @@
+# Role x11vnc: backup VNC to the PHYSICAL screen, listens only on the wg0 address.
+# Why, when NoMachine is alive: an independent channel. If the NoMachine server
+# is down / misconfigured, the physical screen is still reachable via VNC.
+# block + when — group tasks under one condition (equivalent of X11VNC_ENABLE=no
+# => the whole step is skipped).
+---
+- name: x11vnc (the whole block is skipped when x11vnc_enable=false)
+  when: x11vnc_enable
+  block:
+    # Classic VNC protocol uses EXACTLY 8 password characters.
+    - name: Check the VNC password length (exactly 8 characters)
+      ansible.builtin.assert:
+        that: x11vnc_password | length == 8
+        fail_msg: "x11vnc_password must be EXACTLY 8 characters (classic VNC limitation)"
+        quiet: true
+
+    - name: Install x11vnc (no recommends)
+      ansible.builtin.apt:
+        name: x11vnc
+        state: present
+        install_recommends: false
+
+    # creates: — don't overwrite a changed password on rerun (same logic as smm).
+    - name: Hash the VNC password (only if the file doesn't exist yet)
+      ansible.builtin.command:
+        cmd: x11vnc -storepasswd {{ x11vnc_password | quote }} {{ x11vnc_pass_file }}
+        creates: "{{ x11vnc_pass_file }}"
+      no_log: true
+
+    - name: Permissions on the password file
+      ansible.builtin.file:
+        path: "{{ x11vnc_pass_file }}"
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Runner config /etc/default/x11vnc (no secrets)
+      ansible.builtin.template:
+        src: x11vnc.default.j2
+        dest: /etc/default/x11vnc
+        owner: root
+        group: "{{ admin_group }}"
+        mode: '0640'
+      notify: Reload systemd (x11vnc)
+
+    - name: x11vnc-service runner (static, parameters from /etc/default)
+      ansible.builtin.copy:
+        src: x11vnc-service
+        dest: /usr/local/sbin/x11vnc-service
+        mode: '0755'
+
+    - name: x11vnc.service unit
+      ansible.builtin.template:
+        src: x11vnc.service.j2
+        dest: /etc/systemd/system/x11vnc.service
+        mode: '0644'
+      notify: Reload systemd (x11vnc)
+
+    # enable without start: wg0 isn't up yet — the service would just spin in
+    # retries and spam the journal. It comes up after reboot and starts
+    # listening once there's an address on wg0.
+    - name: Enable x11vnc.service on boot
+      ansible.builtin.systemd:
+        name: x11vnc.service
+        enabled: true
+        daemon_reload: true
