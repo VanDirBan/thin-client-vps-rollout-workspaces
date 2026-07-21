@@ -1,0 +1,64 @@
+---
+# vps-provision — Ansible port of vps-provision.sh v2.0
+#   XFCE + NoMachine + Firefox + Multilogin X + Telegram + WireGuard (client)
+#   Users: adams (admin), smm (work)
+#
+# Full run:
+#   ansible-playbook site.yml -k --ask-vault-pass
+#
+# Selected steps (after a failure / to finish a single section):
+#   ansible-playbook site.yml --tags nomachine,display --ask-vault-pass
+#
+# Roles run in playbook order regardless of how tags are listed on the
+# command line — same as the canonical STEPS order in the shell version.
+# The preflight role is tagged 'always' and runs every time.
+#
+# The playbook is idempotent: a re-run does not break what is already done.
+
+- name: Provision a work VPS (XFCE + NoMachine + Firefox + MLX + Telegram + WG client)
+  hosts: vps
+  become: true
+  gather_facts: false
+
+  pre_tasks:
+    # Public repository safety: real passwords live in ignored encrypted vault.yml.
+    - name: Pre-check — required secrets and inventory values were replaced
+      ansible.builtin.assert:
+        that:
+          - vault_admin_pass | default('') | length > 0
+          - vault_admin_pass | default('') != 'CHANGE_ME_STRONG_ADMIN_PASSWORD'
+          - vault_work_pass | default('') | length > 0
+          - vault_work_pass | default('') != 'CHANGE_ME_STRONG_WORK_PASSWORD'
+          - ansible_host | default('') != '203.0.113.10'
+          - >-
+            ((wg_server_pubkey | default('') | length) == 0 and
+             (wg_server_endpoint | default('') | length) == 0) or
+            ((wg_server_pubkey | default('') | length) > 0 and
+             (wg_server_endpoint | default('') | length) > 0)
+        fail_msg: >-
+          Replace the public placeholders before running: copy
+          group_vars/vps/vault.yml.example to ignored vault.yml, set real
+          passwords there, update inventory/hosts.yml with a real VPS address,
+          and either leave both WireGuard server values empty or set both.
+      tags: [always]
+
+    - name: Gather facts after local safety checks
+      ansible.builtin.setup:
+      tags: [always]
+
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+    NEEDRESTART_MODE: a
+  roles:
+    - { role: preflight, tags: always }
+    - { role: base,      tags: base }
+    - { role: desktop,   tags: desktop }
+    - { role: users,     tags: users }
+    - { role: firefox,   tags: firefox }
+    - { role: telegram,  tags: telegram }
+    - { role: wireguard, tags: wireguard }
+    - { role: nomachine, tags: nomachine }
+    - { role: mlx,       tags: mlx }
+    - { role: display,   tags: display }
+    - { role: shortcuts, tags: shortcuts }
+    - { role: summary,   tags: summary }

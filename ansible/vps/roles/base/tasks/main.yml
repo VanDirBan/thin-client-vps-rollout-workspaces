@@ -1,0 +1,85 @@
+---
+# Step: base — full system upgrade + core utilities + locales + time sync.
+# A VPS has no physical drivers (it is a VM): "drivers" here means a full
+# package upgrade plus the hypervisor guest agent (KVM/QEMU).
+
+- name: Gather installed package facts
+  ansible.builtin.package_facts:
+    manager: apt
+
+- name: Detect the root disk for the grub-pc preseed
+  ansible.builtin.shell: |
+    set -o pipefail
+    root_src="$(findmnt -no SOURCE /)"
+    lsblk -no pkname "$root_src" | head -n1
+  args:
+    executable: /bin/bash
+  register: base_root_disk
+  changed_when: false
+  failed_when: false
+  when: "'grub-pc' in ansible_facts.packages"
+
+- name: Preseed the grub-pc install device (full-upgrade would trip on debconf)
+  ansible.builtin.debconf:
+    name: grub-pc
+    question: grub-pc/install_devices
+    value: "/dev/{{ base_root_disk.stdout | trim }}"
+    vtype: multiselect
+  when:
+    - "'grub-pc' in ansible_facts.packages"
+    - (base_root_disk.stdout | default('') | trim) | length > 0
+
+- name: Update cache and full-upgrade the system (keep local config files)
+  ansible.builtin.apt:
+    update_cache: true
+    upgrade: full
+    dpkg_options: "force-confdef,force-confold"
+    lock_timeout: 600
+
+- name: Install core utilities
+  # software-properties-common / apt-transport-https intentionally NOT
+  # installed: add-apt-repository is not used (the Mozilla repo is added by
+  # hand), HTTPS transport is built into apt (Debian 10+ / Ubuntu 18.04+),
+  # and the former does not even exist on Debian 13 — it used to break runs.
+  ansible.builtin.apt:
+    name:
+      - curl
+      - wget
+      - gnupg
+      - ca-certificates
+      - unzip
+      - locales
+      - sudo
+      - libglib2.0-bin
+      - binutils
+    state: present
+
+- name: Install the QEMU guest agent (best effort — only useful on KVM/QEMU)
+  ansible.builtin.apt:
+    name: qemu-guest-agent
+    state: present
+  ignore_errors: true
+
+- name: Generate UTF-8 locales (correct Cyrillic rendering and sorting)
+  community.general.locale_gen:
+    name: "{{ item }}"
+    state: present
+  loop: "{{ locales }}"
+
+- name: Set the system-wide default locale (LANG)
+  ansible.builtin.lineinfile:
+    path: /etc/default/locale
+    regexp: '^LANG='
+    line: "LANG={{ locales[0] }}"
+    create: true
+    mode: "0644"
+
+- name: Set the timezone (empty var = keep the VPS default)
+  community.general.timezone:
+    name: "{{ timezone }}"
+  when: timezone | length > 0
+
+- name: Enable NTP time sync (important for NoMachine TLS)
+  ansible.builtin.command: timedatectl set-ntp true
+  changed_when: false
+  failed_when: false

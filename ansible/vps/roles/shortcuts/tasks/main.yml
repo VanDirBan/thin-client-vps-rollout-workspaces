@@ -1,0 +1,32 @@
+---
+# Step: shortcuts — desktop launchers for the work user (smm).
+# Only the apps the work user actually launches: Firefox, Multilogin X,
+# Telegram. (NoMachine on the VPS is a server — no launcher needed;
+# WireGuard is a service.)
+# A system .desktop is copied into ~/Desktop and owned by the user — this
+# lets XFCE mark the launcher as trusted without complaints.
+
+- name: Ensure the Desktop directory exists
+  ansible.builtin.file:
+    path: "/home/{{ work_user }}/Desktop"
+    state: directory
+    owner: "{{ work_user }}"
+    group: "{{ work_user }}"
+    mode: "0755"
+
+- name: Link desktop launchers
+  ansible.builtin.include_tasks: link_desktop.yml
+  loop:
+    - firefox
+    - telegram
+    - mlxapp
+  loop_control:
+    loop_var: app
+
+- name: Fix Desktop ownership recursively
+  ansible.builtin.file:
+    path: "/home/{{ work_user }}/Desktop"
+    state: directory
+    owner: "{{ work_user }}"
+    group: "{{ work_user }}"
+    recurse: true

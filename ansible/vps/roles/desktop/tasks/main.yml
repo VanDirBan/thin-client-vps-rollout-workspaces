@@ -1,0 +1,64 @@
+---
+# Step: desktop — XFCE core + Windows-10 look + sound + fonts.
+# The desktop core is mandatory; goodies/sound are best effort so one
+# missing package on a given distro does not abort the whole run.
+# pipewire — so NoMachine has something to capture for audio forwarding.
+# arc-theme + papirus — fallback if the B00merang theme cannot be fetched.
+
+- name: Install the XFCE core
+  ansible.builtin.apt:
+    name: [xfce4, xfconf, dbus-x11, dbus-user-session, x11-xserver-utils]
+    state: present
+
+- name: Install packages required for the Windows-10 look
+  # xfce4-whiskermenu-plugin — the "Start" button
+  # gtk2-engines-murrine    — renders the GTK2 part of the B00merang theme
+  # gvfs                    — Trash / removable media on the desktop
+  ansible.builtin.apt:
+    name:
+      - xfce4-whiskermenu-plugin
+      - gtk2-engines-murrine
+      - gvfs
+      - gvfs-daemons
+      - fonts-noto
+      - fonts-noto-color-emoji
+      - fonts-liberation
+    state: present
+
+- name: Install the B00merang Windows-10 theme and icons (pinned commits)
+  ansible.builtin.include_tasks: b00merang.yml
+  loop:
+    - { repo: "Project", commit: "{{ win10_theme_commit }}", target: "/usr/share/themes/Windows-10" }
+    - { repo: "Artwork", commit: "{{ win10_icons_commit }}", target: "/usr/share/icons/Windows-10" }
+  loop_control:
+    loop_var: b00
+    label: "{{ b00.target }}"
+
+- name: Refresh the icon cache
+  ansible.builtin.command: gtk-update-icon-cache -f /usr/share/icons/Windows-10
+  changed_when: false
+  failed_when: false
+
+- name: Install fallback themes (used if B00merang is unavailable)
+  ansible.builtin.apt:
+    name: [arc-theme, papirus-icon-theme]
+    state: present
+  ignore_errors: true
+
+- name: Install desktop extras (best effort)
+  ansible.builtin.apt:
+    name: xfce4-goodies
+    state: present
+  ignore_errors: true
+
+- name: Install the sound stack (best effort)
+  ansible.builtin.apt:
+    name: [pipewire, pipewire-pulse, wireplumber]
+    state: present
+  ignore_errors: true
+
+- name: Install xfce4-screensaver (only needed if Win+L must actually lock)
+  ansible.builtin.apt:
+    name: xfce4-screensaver
+    state: present
+  ignore_errors: true

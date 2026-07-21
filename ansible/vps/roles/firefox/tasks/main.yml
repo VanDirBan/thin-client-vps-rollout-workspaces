@@ -1,0 +1,87 @@
+---
+# Step: firefox — from the Mozilla repository.
+# We want the "real" Firefox: not snap (Ubuntu) and not firefox-esr (Debian).
+# snap is flaky under NoMachine / a virtual display, and esr lags behind on
+# versions. The Mozilla repo is distro-agnostic — works on Debian and Ubuntu.
+# If it fails to install we fall back to firefox-esr from the distro.
+
+- name: Remove the snap version of Firefox (Ubuntu)
+  ansible.builtin.command: snap remove firefox
+  register: ff_snap
+  failed_when: false
+  changed_when: "'removed' in (ff_snap.stdout | default(''))"
+
+- name: Ensure the apt keyrings directory exists
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+
+- name: Install the Mozilla repo signing key
+  ansible.builtin.get_url:
+    url: https://packages.mozilla.org/apt/repo-signing-key.gpg
+    dest: /etc/apt/keyrings/packages.mozilla.org.asc
+    mode: "0644"
+
+- name: Add the Mozilla apt repository
+  ansible.builtin.copy:
+    content: "deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main\n"
+    dest: /etc/apt/sources.list.d/mozilla.list
+    mode: "0644"
+
+- name: Pin firefox* to the Mozilla origin
+  # Pin only firefox*, not the whole origin: if Mozilla ever ships other
+  # packages in that repo, they must not override distro packages.
+  ansible.builtin.copy:
+    content: |
+      Package: firefox*
+      Pin: origin packages.mozilla.org
+      Pin-Priority: 1000
+    dest: /etc/apt/preferences.d/mozilla
+    mode: "0644"
+
+- name: Install Firefox with the Russian language pack
+  ansible.builtin.apt:
+    name: [firefox, firefox-l10n-ru]
+    state: present
+    update_cache: true
+  register: ff_full
+  ignore_errors: true
+
+- name: Install Firefox without the language pack (fallback 1)
+  ansible.builtin.apt:
+    name: firefox
+    state: present
+  when: ff_full is failed
+  register: ff_only
+  ignore_errors: true
+
+- name: Install firefox-esr with the Russian language pack (fallback 2)
+  ansible.builtin.apt:
+    name: [firefox-esr, firefox-esr-l10n-ru]
+    state: present
+  when:
+    - ff_full is failed
+    - ff_only is failed
+  register: ff_esr
+  ignore_errors: true
+
+- name: Install firefox-esr without the language pack (fallback 3)
+  ansible.builtin.apt:
+    name: firefox-esr
+    state: present
+  when:
+    - ff_full is failed
+    - ff_only is failed
+    - ff_esr is failed
+  register: ff_esr_only
+  ignore_errors: true
+
+- name: Warn — no browser could be installed
+  ansible.builtin.debug:
+    msg: "WARNING: neither firefox nor firefox-esr could be installed — install a browser manually"
+  when:
+    - ff_full is failed
+    - ff_only is failed
+    - ff_esr is failed
+    - ff_esr_only is failed

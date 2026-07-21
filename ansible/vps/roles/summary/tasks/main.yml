@@ -1,0 +1,48 @@
+---
+# Step: summary — final report.
+
+- name: Read the VPS WireGuard public key
+  ansible.builtin.command: cat /etc/wireguard/vps_public.key
+  register: sum_pub
+  changed_when: false
+  failed_when: false
+
+- name: Check whether wg0.conf exists
+  ansible.builtin.stat:
+    path: /etc/wireguard/wg0.conf
+  register: sum_wg
+
+- name: Check whether a reboot is required
+  ansible.builtin.stat:
+    path: /var/run/reboot-required
+  register: sum_reboot
+
+- name: Final summary
+  ansible.builtin.debug:
+    msg: |
+      DONE.
+        Distribution: {{ ansible_distribution }} {{ ansible_distribution_version }}
+        Users:        {{ admin_user }} (sudo), {{ work_user }} (unprivileged)
+        Desktop:      XFCE, Windows-10 theme (B00merang {{ win10_theme_commit[:7] }}), Arc/Papirus fallback
+        Locales:      {{ locales | join(' ') }} (LANG={{ locales[0] }})
+        Software:     Firefox, Telegram, Multilogin X, NoMachine, WireGuard
+
+        WireGuard public key of this VPS (add as a peer on the server):
+          {{ sum_pub.stdout | default('') | trim | default('- not found (wireguard step not run?)', true) }}
+      {% if sum_wg.stat.exists %}
+        Tunnel:       wg0 -> {{ wg_server_endpoint }} (address {{ wg_address }})
+      {% else %}
+        Tunnel:       NOT configured — fill wg_server_pubkey / wg_server_endpoint
+                      and re-run:  ansible-playbook site.yml --tags wireguard
+      {% endif %}
+
+- name: IMPORTANT — what this playbook does NOT do (planned as the next step)
+  ansible.builtin.debug:
+    msg: |
+      * Firewall. Right now NoMachine listens on port 4000 on the PUBLIC IP.
+        Until a firewall closes it, connect only via an SSH tunnel or WG.
+
+- name: Reboot recommended
+  ansible.builtin.debug:
+    msg: "Kernel/packages were upgraded — a reboot is recommended."
+  when: sum_reboot.stat.exists

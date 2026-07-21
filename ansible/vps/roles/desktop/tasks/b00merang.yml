@@ -1,0 +1,52 @@
+---
+# Download and unpack a pinned B00merang commit into a system directory.
+# The .provision-commit marker stores the installed SHA: a changed pin in
+# group_vars reinstalls the theme, the same pin skips the step (idempotent).
+# Loop item: b00 = { repo: Project|Artwork, commit: SHA, target: dir }
+
+- name: "{{ b00.target }} — read the installed commit marker"
+  ansible.builtin.command: "cat {{ b00.target }}/.provision-commit"
+  register: b00_marker
+  changed_when: false
+  failed_when: false
+
+- name: "{{ b00.target }} — install pinned commit"
+  when: (b00_marker.stdout | default('') | trim) != b00.commit
+  block:
+    - name: Create a temporary work directory
+      ansible.builtin.tempfile:
+        state: directory
+      register: b00_tmp
+
+    - name: Download the commit archive from GitHub
+      ansible.builtin.get_url:
+        url: "https://codeload.github.com/B00merang-{{ b00.repo }}/Windows-10/zip/{{ b00.commit }}"
+        dest: "{{ b00_tmp.path }}/src.zip"
+        mode: "0644"
+
+    - name: Unpack the archive
+      ansible.builtin.unarchive:
+        src: "{{ b00_tmp.path }}/src.zip"
+        dest: "{{ b00_tmp.path }}"
+        remote_src: true
+
+    - name: Replace the target directory with the unpacked tree
+      ansible.builtin.shell: |
+        rm -rf "{{ b00.target }}"
+        mv "{{ b00_tmp.path }}/Windows-10-{{ b00.commit }}" "{{ b00.target }}"
+
+    - name: Write the commit marker
+      ansible.builtin.copy:
+        content: "{{ b00.commit }}"
+        dest: "{{ b00.target }}/.provision-commit"
+        mode: "0644"
+  rescue:
+    - name: Warn — theme fetch failed, clients will fall back to Arc/Papirus
+      ansible.builtin.debug:
+        msg: "WARNING: failed to fetch B00merang {{ b00.repo }} ({{ b00.commit }}) — Arc/Papirus fallback will be used"
+  always:
+    - name: Remove the temporary directory
+      ansible.builtin.file:
+        path: "{{ b00_tmp.path }}"
+        state: absent
+      when: b00_tmp.path is defined

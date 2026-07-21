@@ -1,0 +1,72 @@
+---
+# Step: nomachine — install + node.cfg (WITHOUT a restart).
+# The XFCE session goes into node.cfg BEFORE any nxserver restart (grey
+# screen otherwise). The single nxserver restart of the whole run is done
+# by the display role, when Xorg/LightDM are already in place and NoMachine
+# has something to attach to.
+# If you run ONLY this step, finish it with:  --tags nomachine,display
+
+- name: Kill stuck NoMachine installer processes (if any)
+  ansible.builtin.include_role:
+    name: preflight
+    tasks_from: nx_cleanup
+
+- name: Check whether NoMachine is installed
+  ansible.builtin.command: dpkg -s nomachine
+  register: nx_installed
+  changed_when: false
+  failed_when: false
+
+- name: Download and install NoMachine {{ nomachine_version }}
+  when: nx_installed.rc != 0
+  block:
+    - name: Create a temporary file for the .deb
+      ansible.builtin.tempfile:
+        suffix: .deb
+      register: nx_tmp
+
+    - name: Download the NoMachine .deb
+      ansible.builtin.get_url:
+        url: "{{ nomachine_url }}"
+        dest: "{{ nx_tmp.path }}"
+        mode: "0644"
+        force: true
+
+    - name: Validate that the download is a real .deb
+      # For a non-existent version download.nomachine.com returns an HTML
+      # page with HTTP 200 (not 404!). Without this check apt would fail
+      # later with a cryptic "Invalid archive signature".
+      ansible.builtin.command: "dpkg-deb --info {{ nx_tmp.path }}"
+      changed_when: false
+
+    - name: Install the NoMachine package
+      ansible.builtin.apt:
+        deb: "{{ nx_tmp.path }}"
+  rescue:
+    - name: Fail with a clear diagnosis
+      ansible.builtin.fail:
+        msg: >-
+          NoMachine: no valid .deb obtained.
+          URL: {{ nomachine_url }}.
+          Either the download failed (network/URL) or the server returned an
+          HTML page instead of a package (the pinned version is outdated).
+          Pick the current version at https://downloads.nomachine.com/download/?id=1
+          and update nomachine_* in group_vars/vps/vars.yml.
+  always:
+    - name: Remove the temporary .deb
+      ansible.builtin.file:
+        path: "{{ nx_tmp.path }}"
+        state: absent
+      when: nx_tmp.path is defined
+
+- name: Check whether node.cfg exists
+  ansible.builtin.stat:
+    path: /usr/NX/etc/node.cfg
+  register: nx_cfg
+
+- name: Set the XFCE session as the NoMachine desktop command
+  ansible.builtin.lineinfile:
+    path: /usr/NX/etc/node.cfg
+    regexp: '^DefaultDesktopCommand'
+    line: 'DefaultDesktopCommand "/usr/bin/startxfce4"'
+  when: nx_cfg.stat.exists

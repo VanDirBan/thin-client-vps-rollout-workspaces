@@ -1,0 +1,47 @@
+---
+# Step: mlx — Multilogin X Desktop (a local .deb shipped with the project).
+# Put {{ mlx_deb_name }} into roles/mlx/files/ on the admin laptop.
+
+- name: Make sure the MLX .deb is present on the control node
+  ansible.builtin.assert:
+    that:
+      - (lookup('ansible.builtin.fileglob', role_path ~ '/files/' ~ mlx_deb_name)) | length > 0
+    fail_msg: "Multilogin Desktop .deb not found — put {{ mlx_deb_name }} into roles/mlx/files/"
+
+- name: Check whether Multilogin X is already installed
+  ansible.builtin.command: dpkg -s mlxapp
+  register: mlx_installed
+  changed_when: false
+  failed_when: false
+
+- name: Install Multilogin X Desktop
+  when: mlx_installed.rc != 0
+  block:
+    - name: Copy the .deb to the VPS
+      # apt refuses to install from directories with foreign permissions —
+      # hence a world-readable copy under /tmp.
+      ansible.builtin.copy:
+        src: "{{ mlx_deb_name }}"
+        dest: "/tmp/{{ mlx_deb_name }}"
+        mode: "0644"
+
+    - name: Validate the .deb
+      ansible.builtin.command: "dpkg-deb --info /tmp/{{ mlx_deb_name }}"
+      changed_when: false
+
+    - name: Pre-create /root/.config
+      # The mlxapp postinst writes into the invoking user's ~/.config (root
+      # here) and crashes if the directory does not exist.
+      ansible.builtin.file:
+        path: /root/.config
+        state: directory
+        mode: "0700"
+
+    - name: Install the package
+      ansible.builtin.apt:
+        deb: "/tmp/{{ mlx_deb_name }}"
+  always:
+    - name: Remove the temporary .deb
+      ansible.builtin.file:
+        path: "/tmp/{{ mlx_deb_name }}"
+        state: absent

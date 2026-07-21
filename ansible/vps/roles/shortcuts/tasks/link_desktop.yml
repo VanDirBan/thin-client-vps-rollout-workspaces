@@ -1,0 +1,39 @@
+---
+# Copy the first matching system .desktop into the work user's Desktop and
+# mark it trusted. `-print -quit` stops find at the first match (same trick
+# as the shell version — avoids the SIGPIPE trap of `| head -n1`).
+
+- name: "{{ app }} — locate the system .desktop file"
+  ansible.builtin.shell: |
+    find /usr/share/applications /var/lib/flatpak/exports/share/applications \
+        -maxdepth 1 -iname "*{{ app }}*.desktop" -print -quit 2>/dev/null || true
+  register: app_src
+  changed_when: false
+
+- name: "{{ app }} — warn if no .desktop was found"
+  ansible.builtin.debug:
+    msg: "WARNING: no .desktop for '{{ app }}' — skipping (fix manually)"
+  when: (app_src.stdout | trim) | length == 0
+
+- name: "{{ app }} — install the launcher"
+  when: (app_src.stdout | trim) | length > 0
+  block:
+    - name: Compute the destination path
+      ansible.builtin.set_fact:
+        app_dst: "/home/{{ work_user }}/Desktop/{{ app_src.stdout | trim | basename }}"
+
+    - name: Copy the .desktop to the user's Desktop
+      ansible.builtin.copy:
+        src: "{{ app_src.stdout | trim }}"
+        dest: "{{ app_dst }}"
+        remote_src: true
+        owner: "{{ work_user }}"
+        group: "{{ work_user }}"
+        mode: "0755"
+
+    - name: Mark the launcher as trusted for the user's XFCE/Thunar
+      ansible.builtin.command: dbus-run-session gio set "{{ app_dst }}" metadata::trusted true
+      become: true
+      become_user: "{{ work_user }}"
+      changed_when: false
+      failed_when: false

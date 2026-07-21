@@ -1,0 +1,14 @@
+---
+# Step: preflight — make a re-run safe. Always executed (tag: always).
+
+- name: Show detected distribution
+  ansible.builtin.debug:
+    msg: "Distribution: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+
+- name: Kill stuck NoMachine installer processes (if any)
+  ansible.builtin.import_tasks: nx_cleanup.yml
+
+- name: Finish possibly half-configured packages from a previous run
+  ansible.builtin.command: dpkg --configure -a
+  changed_when: false
+  failed_when: false

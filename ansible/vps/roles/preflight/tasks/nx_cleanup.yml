@@ -1,0 +1,20 @@
+---
+# Kill a stuck NoMachine install chain.
+# Symptom: `nxserver.bin --subscription` spins at 100% CPU and keeps
+# postinst -> dpkg -> apt-get alive, so they never release
+# /var/lib/dpkg/lock-frontend. We kill ONLY the nx chain — a foreign
+# apt/unattended-upgrades run is handled by apt's lock_timeout instead.
+
+- name: Detect stuck NoMachine processes
+  ansible.builtin.shell: |
+    pgrep -f 'nxserver\.bin --subscription' || pgrep -f 'nxserver.*--install' || true
+  register: nx_stuck
+  changed_when: false
+
+- name: Kill stuck NoMachine processes and let dpkg release its lock
+  ansible.builtin.shell: |
+    pkill -9 -f 'nxserver\.bin --subscription' || true
+    pkill -9 -f 'nxserver.*--install' || true
+    sleep 3
+  when: nx_stuck.stdout | length > 0
+  changed_when: true

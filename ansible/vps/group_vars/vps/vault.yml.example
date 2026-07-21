@@ -1,0 +1,8 @@
+---
+# SECRETS TEMPLATE. Copy this file to ignored vault.yml, replace the
+# placeholders, then encrypt it before routine use:
+#   cp group_vars/vps/vault.yml.example group_vars/vps/vault.yml
+#   ansible-vault encrypt group_vars/vps/vault.yml
+# From then on every run needs --ask-vault-pass (or --vault-password-file).
+vault_admin_pass: "CHANGE_ME_STRONG_ADMIN_PASSWORD"
+vault_work_pass: "CHANGE_ME_STRONG_WORK_PASSWORD"

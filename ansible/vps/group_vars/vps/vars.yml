@@ -1,0 +1,55 @@
+---
+# Main configuration — the only place you should need to edit.
+# Mirror of the CONFIG block from vps-provision.sh v2.0.
+
+admin_user: adams
+work_user: smm
+
+# Actual passwords live in ignored vault.yml (copy from vault.yml.example and encrypt it with ansible-vault).
+# Passwords are set ONLY on user creation — a re-run never rolls back a
+# password that was changed by hand after provisioning.
+admin_pass: "{{ vault_admin_pass }}"
+work_pass: "{{ vault_work_pass }}"
+
+# Empty string ("") = do not touch the timezone, keep the VPS default (UTC).
+timezone: "Europe/Berlin"
+
+# UTF-8 locales to generate (needed for correct Cyrillic rendering/sorting).
+# The first one becomes the system-wide LANG.
+locales:
+  - en_US.UTF-8
+  - ru_RU.UTF-8
+
+# --- WireGuard (the VPS is a CLIENT of the existing WG network) --------------
+# The VPS key pair is always generated (tag: wireguard); the public key is
+# printed in the summary — add it as a peer on the WG server (pfSense).
+#
+# wg0.conf is created and the tunnel started ONLY when BOTH
+# wg_server_pubkey and wg_server_endpoint are non-empty. Until then the step
+# stops at key generation and prints a hint. Filled them in? Re-run:
+#   ansible-playbook site.yml --tags wireguard
+wg_server_pubkey: ""
+wg_server_endpoint: ""                         # host:port of the WG server; empty = skip wg0.conf/start
+wg_allowed_ips: "10.77.77.0/24"               # split tunnel: tunnel subnet only
+wg_keepalive: 25                              # keeps the NAT mapping alive
+
+# --- NoMachine: pinned version ------------------------------------------------
+# Check the current amd64 DEB at https://downloads.nomachine.com/download/?id=1
+# NOTE: for a non-existent version the server returns an HTML page with
+# HTTP 200 (not 404!) — the nomachine role validates the download with
+# dpkg-deb, otherwise apt would fail with a cryptic "Invalid archive signature".
+nomachine_branch: "9.7"
+nomachine_version: "9.7.3"
+nomachine_build: "1"
+nomachine_url: "https://download.nomachine.com/download/{{ nomachine_branch }}/Linux/nomachine_{{ nomachine_version }}_{{ nomachine_build }}_amd64.deb"
+
+# --- Windows-10 theme (B00merang), pinned by commit SHA -----------------------
+# Same commits as local-provision.sh on the laptops — bit-identical look.
+# Changing a SHA makes the theme reinstall itself (.provision-commit marker);
+# the same SHA skips the download (idempotent).
+win10_theme_commit: "3a4116603b66a9adcb78f3987d7ea6f01de1cbce"   # B00merang-Project/Windows-10
+win10_icons_commit: "9f199c6b7c6050f36d0d15aaa6e9f4847e8b9066"   # B00merang-Artwork/Windows-10
+
+# --- Multilogin X -------------------------------------------------------------
+# The .deb ships with the project: put it into roles/mlx/files/
+mlx_deb_name: "desktop-multiloginx-ubuntu-24.04-amd64.deb"

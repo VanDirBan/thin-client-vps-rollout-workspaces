@@ -1,0 +1,9 @@
+[Interface]
+Address    = {{ wg_address }}
+PrivateKey = {{ wg_priv.content | b64decode | trim }}
+
+[Peer]
+PublicKey           = {{ wg_server_pubkey }}
+Endpoint            = {{ wg_server_endpoint }}
+AllowedIPs          = {{ wg_allowed_ips }}
+PersistentKeepalive = {{ wg_keepalive }}

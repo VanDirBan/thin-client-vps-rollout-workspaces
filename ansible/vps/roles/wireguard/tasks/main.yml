@@ -1,0 +1,80 @@
+---
+# Step: wireguard — the VPS is a CLIENT of the existing WG network.
+# Always: packages + the VPS's own key pair (the public key goes into the
+# summary — add it as a peer on the WG server / pfSense).
+# wg0.conf is written and the tunnel started ONLY when both
+# wg_server_pubkey and wg_server_endpoint are set in group_vars.
+
+- name: Install WireGuard userspace tools (wg / wg-quick — mandatory)
+  ansible.builtin.apt:
+    name: wireguard-tools
+    state: present
+
+- name: Install the wireguard metapackage (best effort — modern kernels ship the module)
+  ansible.builtin.apt:
+    name: wireguard
+    state: present
+  ignore_errors: true
+
+- name: Create /etc/wireguard readable by sudo-group admins
+  ansible.builtin.file:
+    path: /etc/wireguard
+    state: directory
+    owner: root
+    group: sudo
+    mode: "0770"
+
+- name: Generate the VPS key pair (only if missing)
+  ansible.builtin.shell: |
+    set -o pipefail
+    umask 077
+    wg genkey | tee /etc/wireguard/vps_private.key | wg pubkey > /etc/wireguard/vps_public.key
+  args:
+    creates: /etc/wireguard/vps_private.key
+    executable: /bin/bash
+
+- name: Read the VPS public key
+  ansible.builtin.slurp:
+    src: /etc/wireguard/vps_public.key
+  register: wg_pub
+
+- name: Decide whether the tunnel can be configured
+  ansible.builtin.set_fact:
+    wg_configured: "{{ (wg_server_pubkey | length > 0) and (wg_server_endpoint | length > 0) }}"
+
+- name: Show peer instructions (server parameters are not set yet)
+  ansible.builtin.debug:
+    msg: >-
+      wg_server_pubkey / wg_server_endpoint are empty — wg0.conf NOT created.
+      1) On the WG server add a peer with this public key:
+      {{ wg_pub.content | b64decode | trim }}
+      2) Fill wg_server_pubkey and wg_server_endpoint in group_vars/vps/vars.yml.
+      3) Re-run the step:  ansible-playbook site.yml --tags wireguard
+  when: not wg_configured
+
+- name: Configure and start the tunnel
+  when: wg_configured
+  block:
+    - name: Read the VPS private key
+      ansible.builtin.slurp:
+        src: /etc/wireguard/vps_private.key
+      register: wg_priv
+      no_log: true
+
+    - name: Render /etc/wireguard/wg0.conf
+      # wg0.conf is derived from group_vars, so it is rewritten on every
+      # change: edit the vars + re-run the step = updated tunnel. Manual
+      # edits to wg0.conf will not survive a run — change the vars instead.
+      ansible.builtin.template:
+        src: wg0.conf.j2
+        dest: /etc/wireguard/wg0.conf
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true   # the rendered file contains the private key
+      notify: Restart wg-quick@wg0
+
+    - name: Enable wg-quick@wg0
+      ansible.builtin.systemd_service:
+        name: wg-quick@wg0
+        enabled: true

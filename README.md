@@ -11,23 +11,35 @@ This repository is currently the baseline implementation. It is expected to evol
 
 ## Ansible transition track
 
-A parallel Ansible implementation now lives in `ansible/thin-client/`.
+Parallel Ansible implementations now live under `ansible/`:
 
-Why it is here:
+- `ansible/vps/` — Ansible port of `scripts/vps-provision.sh` for the working VPS desktop.
+- `ansible/thin-client/` — Ansible port of `scripts/local-provision.sh` for the physical thin-client laptop.
+
+Why they are here:
 
 - The current approved rollout path remains the familiar shell-script workflow under `scripts/`. That keeps the project acceptable for leadership that wants known, simple deployment mechanics.
-- The Ansible tree is the modernization/learning path: the same thin-client provisioning logic is being translated into declarative roles, inventory, group variables, host variables, handlers, templates, and Vault-managed secrets.
+- The Ansible trees are the modernization/learning path: the same provisioning logic is being translated into declarative roles, inventory, group variables, host variables, handlers, templates, and Vault-managed secrets.
 - Both paths should coexist for now. Scripts stay the operational baseline; Ansible is the controlled migration track where each script step can be mapped to an idempotent role and tested before it becomes the default.
 
-How to read it:
+How to read them:
 
-- `ansible/thin-client/site.yml` is the main playbook. It calls roles in the same rough order as `scripts/local-provision.sh`.
-- `ansible/thin-client/inventory/hosts.yml` lists target laptops; `host_vars/` stores per-machine values such as the WireGuard client address.
-- `ansible/thin-client/inventory/group_vars/thin_clients/vars.yml` stores shared non-secret settings.
-- `ansible/thin-client/inventory/group_vars/thin_clients/vault.yml.example` is a committed template only. Copy it to ignored `vault.yml`, replace placeholders, then encrypt it with Ansible Vault.
-- `ansible/thin-client/README.md` explains the Bash-to-Ansible mapping, setup, dry-run flow, selected-role runs, and current gaps.
+- `ansible/vps/site.yml` provisions the working VPS: base system, XFCE/LightDM, users, Firefox, Telegram, WireGuard client, NoMachine, Multilogin X, desktop shortcuts, and summary.
+- `ansible/thin-client/site.yml` provisions the physical thin client and calls roles in the same rough order as `scripts/local-provision.sh`.
+- Each Ansible directory has its own `README.md`, `ansible.cfg`, inventory, variables, roles, and `vault.yml.example` template.
+- Real `vault.yml` files and local binary installers stay ignored. Copy the example, replace placeholders, and encrypt with Ansible Vault before routine use.
 
-Typical first commands from the repository root:
+Typical first commands for the VPS path:
+
+```bash
+cd ansible/vps
+ansible-galaxy collection install -r requirements.yml
+cp group_vars/vps/vault.yml.example group_vars/vps/vault.yml
+ansible-vault encrypt group_vars/vps/vault.yml
+ansible-playbook site.yml -k --ask-vault-pass --check --diff --limit vps-199
+```
+
+Typical first commands for the thin-client path:
 
 ```bash
 cd ansible/thin-client
@@ -40,7 +52,7 @@ ansible-playbook site.yml -K --ask-vault-pass --check --diff --limit tc-05
 ## Current status
 
 - Development-stage project, not a finished production distribution.
-- Source scripts, packages, and the first Ansible migration slice are imported, organized, and sanitized.
+- Source scripts, packages, and the first Ansible migration slices are imported, organized, and sanitized.
 - Real passwords, private keys, WireGuard keys, production SMB paths, screenshots, archives, Vault files, and binary installers are intentionally not committed.
 - Full firewall hardening is not implemented yet. Until it is added, treat externally reachable services, especially NoMachine, as requiring manual network restriction.
 
@@ -90,6 +102,13 @@ ansible-playbook site.yml -K --ask-vault-pass --check --diff --limit tc-05
 ```text
 .
 ├── ansible/
+│   ├── vps/                            # First Ansible migration slice for VPS desktop rollout
+│   │   ├── site.yml                    # Main playbook, equivalent to ordered vps-provision steps
+│   │   ├── ansible.cfg
+│   │   ├── requirements.yml
+│   │   ├── inventory/hosts.yml         # VPS fleet and per-host tunnel addresses
+│   │   ├── group_vars/vps/             # Shared VPS vars and Vault template
+│   │   └── roles/                      # preflight/base/desktop/users/firefox/etc.
 │   └── thin-client/                    # First Ansible migration slice for physical thin-client rollout
 │       ├── site.yml                    # Main playbook, equivalent to ordered script steps
 │       ├── ansible.cfg
@@ -134,6 +153,27 @@ ansible-playbook site.yml -K --ask-vault-pass --check --diff --limit tc-05
 ```
 
 ## Components
+
+### `ansible/vps/`
+
+First Ansible migration slice for VPS desktop provisioning.
+
+It maps the bash `scripts/vps-provision.sh` flow into roles:
+
+- `preflight` — safe reruns, stuck NoMachine installer cleanup, half-configured package recovery;
+- `base` — full upgrade, core utilities, locales, timezone, QEMU guest agent best effort;
+- `desktop` — XFCE core, B00merang Windows-10 look, fallback themes, sound stack;
+- `users` — admin sudo user and unprivileged work user, with passwords set only on creation;
+- `firefox` — Mozilla APT repo install with distro/ESR fallback;
+- `telegram` — Telegram Desktop install;
+- `wireguard` — VPS client keypair and optional `wg0.conf`/service once server peer values are set;
+- `nomachine` — NoMachine install and `node.cfg` session tuning;
+- `mlx` — local Multilogin X `.deb` install, with the binary intentionally ignored by git;
+- `display` — Xorg dummy display, LightDM/XFCE autologin, keyboard layout autostart, final NoMachine restart;
+- `shortcuts` — work-user desktop launchers;
+- `summary` — final operator report and remaining firewall warning.
+
+This Ansible path still keeps the same major operational gap as the script path: firewall policy is not configured yet, so public NoMachine exposure must be closed manually until the next hardening step is added.
 
 ### `ansible/thin-client/`
 

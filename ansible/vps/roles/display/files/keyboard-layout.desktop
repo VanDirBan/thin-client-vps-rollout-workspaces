@@ -1,0 +1,5 @@
+[Desktop Entry]
+Type=Application
+Name=Keyboard layout us,ru
+Exec=sh -c 'sleep 3; setxkbmap -layout us,ru -option grp:alt_shift_toggle'
+X-GNOME-Autostart-enabled=true

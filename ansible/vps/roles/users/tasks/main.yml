@@ -1,0 +1,54 @@
+---
+# Step: users — adams (sudo) and smm (unprivileged).
+# Order matters: adams gets sudo BEFORE smm loses it — this rules out the
+# scenario of ending up with no administrator at all.
+#
+# Passwords are set ONLY on user creation (update_password: on_create).
+# A re-run never rolls a manually changed password back to the (potentially
+# already compromised/rotated) one stored in the vault.
+
+- name: Create the admin user (sudo; password only on creation)
+  ansible.builtin.user:
+    name: "{{ admin_user }}"
+    shell: /bin/bash
+    create_home: true
+    password: "{{ admin_pass | password_hash('sha512') }}"
+    update_password: on_create
+    groups: [sudo, audio, video]   # audio/video — for GUI and sound
+    append: true
+
+- name: Create the work user (no privileges; password only on creation)
+  ansible.builtin.user:
+    name: "{{ work_user }}"
+    shell: /bin/bash
+    create_home: true
+    password: "{{ work_pass | password_hash('sha512') }}"
+    update_password: on_create
+    groups: [audio, video]
+    append: true
+
+- name: Make sure the work user is NOT in sudo (in case it ever slipped in)
+  ansible.builtin.command: "gpasswd -d {{ work_user }} sudo"
+  register: users_desudo
+  failed_when: false
+  changed_when: users_desudo.rc == 0
+
+- name: Fix home ownership recursively
+  ansible.builtin.file:
+    path: "/home/{{ item }}"
+    state: directory
+    owner: "{{ item }}"
+    group: "{{ item }}"
+    recurse: true
+  loop:
+    - "{{ admin_user }}"
+    - "{{ work_user }}"
+
+- name: Restrict the home directory mode (top level only)
+  ansible.builtin.file:
+    path: "/home/{{ item }}"
+    state: directory
+    mode: "0750"
+  loop:
+    - "{{ admin_user }}"
+    - "{{ work_user }}"

@@ -23,6 +23,9 @@ private/
 ansible/**/inventory/group_vars/**/vault.yml
 ansible/**/inventory/group_vars/**/vault*.yml
 !ansible/**/inventory/group_vars/**/*.example
+ansible/**/group_vars/**/vault.yml
+ansible/**/group_vars/**/vault*.yml
+!ansible/**/group_vars/**/*.example
 
 # Runtime data, screenshots, encrypted exports, logs
 screenshots/

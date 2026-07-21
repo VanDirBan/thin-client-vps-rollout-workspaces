@@ -1,0 +1,139 @@
+---
+# Step: display — Xorg + LightDM + an XFCE session on :0 + nxserver restart.
+# NoMachine free shares the PHYSICAL display (a per-client virtual desktop
+# is the paid Workstation product). So a real Xorg with XFCE must run on :0,
+# otherwise "Failed to start session". A bare DE is not enough — a display
+# manager has to start it.
+
+- name: Install Xorg + LightDM + the XFCE session
+  ansible.builtin.apt:
+    name:
+      - xorg
+      - xinit
+      - lightdm
+      - lightdm-gtk-greeter
+      - xfce4-session
+      - xfce4-terminal
+    state: present
+
+- name: Ensure the lightdm.conf.d directory exists
+  ansible.builtin.file:
+    path: /etc/lightdm/lightdm.conf.d
+    state: directory
+    mode: "0755"
+
+- name: Make XFCE the default LightDM session (with work-user autologin)
+  ansible.builtin.template:
+    src: 50-xfce.conf.j2
+    dest: /etc/lightdm/lightdm.conf.d/50-xfce.conf
+    mode: "0644"
+
+- name: Install per-user .xsession with a mandatory dbus session bus
+  # Without dbus-run-session, xfce4-session / xfconf / polkit crash.
+  ansible.builtin.copy:
+    content: |
+      #!/bin/sh
+      exec dbus-run-session -- startxfce4
+    dest: "/home/{{ item }}/.xsession"
+    owner: "{{ item }}"
+    group: "{{ item }}"
+    mode: "0755"
+  loop:
+    - "{{ work_user }}"
+    - "{{ admin_user }}"
+
+- name: Fix sticky-bit permissions on /tmp and /var/tmp
+  # Insurance against old images/runs with a global umask 077 leak:
+  # X11 and many other things silently break when /tmp is not 1777.
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "1777"
+  loop:
+    - /tmp
+    - /var/tmp
+
+- name: Install the dummy Xorg video driver
+  ansible.builtin.apt:
+    name: xserver-xorg-video-dummy
+    state: present
+
+- name: Ensure the xorg.conf.d directory exists
+  ansible.builtin.file:
+    path: /etc/X11/xorg.conf.d
+    state: directory
+    mode: "0755"
+
+- name: Force 1920x1080 on the headless Xorg
+  # Without a monitor there is no EDID, so Xorg picks a tiny default mode.
+  ansible.builtin.copy:
+    src: 10-dummy.conf
+    dest: /etc/X11/xorg.conf.d/10-dummy.conf
+    mode: "0644"
+
+- name: Install the panel keyboard-layout indicator (optional)
+  ansible.builtin.apt:
+    name: xfce4-xkb-plugin
+    state: present
+  ignore_errors: true
+
+- name: Ensure the work user's autostart directory exists
+  ansible.builtin.file:
+    path: "/home/{{ work_user }}/.config/autostart"
+    state: directory
+    owner: "{{ work_user }}"
+    group: "{{ work_user }}"
+    mode: "0755"
+
+- name: Autostart entry for the us,ru keyboard layout (Alt+Shift toggle)
+  ansible.builtin.copy:
+    src: keyboard-layout.desktop
+    dest: "/home/{{ work_user }}/.config/autostart/keyboard-layout.desktop"
+    owner: "{{ work_user }}"
+    group: "{{ work_user }}"
+    mode: "0644"
+
+- name: Enable LightDM
+  ansible.builtin.systemd_service:
+    name: lightdm
+    enabled: true
+  failed_when: false
+
+- name: Restart LightDM
+  ansible.builtin.systemd_service:
+    name: lightdm
+    state: restarted
+  register: display_lightdm
+  ignore_errors: true
+
+- name: Warn — LightDM did not restart
+  ansible.builtin.debug:
+    msg: "WARNING: LightDM did not restart — check: systemctl status lightdm"
+  when: display_lightdm is failed
+
+- name: Check for nxserver
+  ansible.builtin.stat:
+    path: /usr/NX/bin/nxserver
+  register: display_nx_bin
+
+- name: Restart nxserver (the ONLY nx restart of the whole run)
+  # Done here, when node.cfg (nomachine step) and the display stack are
+  # already in place. With a timeout so a stuck process cannot hang the
+  # provisioning.
+  ansible.builtin.command: timeout 60 /usr/NX/bin/nxserver --restart
+  when: display_nx_bin.stat.exists
+  register: display_nx_restart
+  changed_when: true
+  failed_when: false
+
+- name: Warn — nxserver restart timed out or failed
+  ansible.builtin.debug:
+    msg: "WARNING: nxserver --restart did not finish in 60s — check manually: ps -ef | grep nx"
+  when:
+    - display_nx_bin.stat.exists
+    - display_nx_restart.rc | default(0) != 0
+
+- name: Warn — nxserver not found
+  ansible.builtin.debug:
+    msg: "WARNING: nxserver not found — has the nomachine step been run?"
+  when: not display_nx_bin.stat.exists
