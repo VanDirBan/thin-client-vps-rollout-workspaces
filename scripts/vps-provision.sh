@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #==============================================================================
-# vps-provision.sh v2.0 — initial rollout of the working VPS (Debian 13 / Ubuntu)
-#   XFCE + NoMachine + Firefox + Multilogin X + Telegram + WireGuard (client)
+# vps-provision.sh v2.3 — initial rollout of the working VPS (Debian 13 / Ubuntu)
+#   XFCE + NoMachine + Firefox + Teams + Multilogin X + Telegram + WireGuard (client)
+#   Audio tunnel to paired thin client + node_exporter metrics on WireGuard only
 #   Users: adams (admin), smm (worker)
 #
 # Usage (full run):
@@ -67,6 +68,22 @@ NOMACHINE_VERSION="${NOMACHINE_VERSION:-9.7.3}"
 NOMACHINE_BUILD="${NOMACHINE_BUILD:-1}"
 NOMACHINE_URL="https://download.nomachine.com/download/${NOMACHINE_BRANCH}/Linux/nomachine_${NOMACHINE_VERSION}_${NOMACHINE_BUILD}_amd64.deb"
 
+#--- Audio tunnel: VPS plays sound on the thin client and records its microphone ---
+#   The laptop is a PipeWire TCP server (module-native-protocol-tcp, installed by local-provision).
+#   Here we install a user-level keeper in the WORK_USER session. It keeps a
+#   tunnel-sink/source pair loaded and recreates it after disconnects: laptop reboot,
+#   WireGuard outage, temporary PipeWire restart, etc.
+AUDIO_TUNNEL_ENABLE="${AUDIO_TUNNEL_ENABLE:-yes}"
+AUDIO_LAPTOP_IP="${AUDIO_LAPTOP_IP:-}"    # paired laptop WG address, for example 10.8.0.6-99
+AUDIO_TCP_PORT="${AUDIO_TCP_PORT:-4713}"
+
+#--- node_exporter: Prometheus metrics for the admin node ----------------------
+# Bind ONLY to this VPS's WireGuard address. This matters because the VPS has a
+# public IP and firewall automation is not implemented yet; binding to 0.0.0.0
+# would expose metrics to the Internet. If wg0 is not up yet, systemd retries.
+NODE_EXPORTER_ENABLE="${NODE_EXPORTER_ENABLE:-yes}"
+NODE_EXPORTER_PORT="${NODE_EXPORTER_PORT:-9100}"
+
 #--- Windows-10 theme (B00merang): pinned to a commit SHA ---------------------------
 # Same commits as in local-provision.sh on the laptops — the look matches bit-for-bit.
 # When the SHA changes, the theme reinstalls itself automatically (via the .provision-commit marker).
@@ -87,6 +104,21 @@ die()  { echo -e "\033[1;31m[FAIL]\033[0m $*" | tee -a "$LOG" >&2; exit 1; }
 
 # best-effort install: failure = warning, not a full rollout stop
 apt_try() { apt-get install -y "$@" || warn "Failed to install: $*  (skipping)"; }
+
+# Reference backup: keep one original .orig file instead of producing timestamped
+# copies on every rerun.
+ensure_backup() { local f="$1"; [ -f "${f}.orig" ] || cp -a "$f" "${f}.orig"; }
+
+# NoMachine stores defaults as commented lines (#Key value). Update an existing
+# commented/uncommented key, or append it if it is absent.
+set_nodecfg() {
+    local key="$1" val="$2" cfg="/usr/NX/etc/node.cfg"
+    if grep -qE "^#?${key}[[:space:]]" "$cfg"; then
+        sed -i -E "s|^#?${key}[[:space:]].*|${key} ${val}|" "$cfg"
+    else
+        echo "${key} ${val}" >> "$cfg"
+    fi
+}
 
 # Download the .deb and make sure it's ACTUALLY a package, not an HTML page.
 # Some servers (download.nomachine.com) return HTML with code 200 for a
@@ -359,6 +391,46 @@ step_telegram() {
 }
 
 #==============================================================================
+# STEP: teams — Microsoft Teams via teams-for-linux
+#     Native Teams for Linux has been dead since 2022; Microsoft points Linux
+#     users to the PWA. teams-for-linux is an Electron wrapper around web Teams
+#     with its own apt repository, so it behaves like a desktop app and updates
+#     with the system.
+#==============================================================================
+step_teams() {
+    log "Teams (teams-for-linux): repository + package + worker shortcut"
+
+    install -d -m 755 /etc/apt/keyrings
+    if [ ! -s /etc/apt/keyrings/teams-for-linux.asc ]; then
+        wget -qO /etc/apt/keyrings/teams-for-linux.asc             https://repo.teamsforlinux.de/teams-for-linux.asc             || { warn "Failed to download the teams-for-linux key — skipping step"; return 0; }
+    fi
+    cat > /etc/apt/sources.list.d/teams-for-linux.sources <<'EOF'
+# managed by vps-provision.sh
+Types: deb
+URIs: https://repo.teamsforlinux.de/debian/
+Suites: stable
+Components: main
+Architectures: amd64
+Signed-By: /etc/apt/keyrings/teams-for-linux.asc
+EOF
+
+    # Refresh only this source when possible; fall back to a normal apt update.
+    apt-get update         -o Dir::Etc::sourcelist="sources.list.d/teams-for-linux.sources"         -o Dir::Etc::sourceparts="-" -o APT::Get::List-Cleanup="0"         >/dev/null 2>&1 || apt-get update >/dev/null 2>&1
+    apt_try teams-for-linux
+
+    local desk="/home/${WORK_USER}/Desktop"
+    if [ -f /usr/share/applications/teams-for-linux.desktop ]; then
+        install -d -o "$WORK_USER" -g "$WORK_USER" -m 755 "$desk"
+        install -o "$WORK_USER" -g "$WORK_USER" -m 755             /usr/share/applications/teams-for-linux.desktop             "${desk}/teams-for-linux.desktop"
+    else
+        warn "teams-for-linux.desktop not found — did the package install?"
+    fi
+}
+
+#==============================================================================
+# STEP: wireguard
+
+#==============================================================================
 # STEP: wireguard — the VPS as a CLIENT of an existing WG network
 #     Always: packages + the VPS's own keypair (the public key is printed
 #     in the summary; add it as a peer on the server).
@@ -448,15 +520,204 @@ step_nomachine() {
         log "NoMachine already installed — skipping"
     fi
 
+    # node.cfg: XFCE session + server-side NX audio disabled. AudioInterface
+    # disabled mutes both playback and microphone in the NX channel regardless
+    # of client-side checkboxes; all audio is handled by the separate PipeWire
+    # tunnel to the paired thin client.
+    # We still do NOT restart nxserver here; display performs the single restart.
     local node_cfg="/usr/NX/etc/node.cfg"
     if [ -f "$node_cfg" ]; then
-        if grep -q '^DefaultDesktopCommand' "$node_cfg"; then
-            sed -i 's|^DefaultDesktopCommand.*|DefaultDesktopCommand "/usr/bin/startxfce4"|' "$node_cfg"
-        else
-            echo 'DefaultDesktopCommand "/usr/bin/startxfce4"' >> "$node_cfg"
-        fi
+        ensure_backup "$node_cfg"
+        set_nodecfg DefaultDesktopCommand '"/usr/bin/startxfce4"'
+        set_nodecfg AudioInterface disabled
+        log "node.cfg: DefaultDesktopCommand=startxfce4, AudioInterface=disabled (reference: node.cfg.orig)"
+    else
+        warn "node.cfg not found — skipping NoMachine tuning"
     fi
 }
+
+#==============================================================================
+# STEP: audio — user-level audio tunnel keeper to the thin client
+#     Architecture mirrors the wg-watchdog pattern: static runner (quoted
+#     heredoc) + config in /etc/default + a systemd unit. The unit is a USER-level
+#     unit because audio lives in the WORK_USER session. It is enabled globally;
+#     the runner exits unless it is running as WORK_USER.
+#     tunnel-sink is loaded without sink=, so it plays into the laptop's current
+#     default sink. Switching HyperX/built-in speakers on the laptop remains
+#     transparent to the VPS.
+#==============================================================================
+step_audio() {
+    local enable="$AUDIO_TUNNEL_ENABLE"
+    if [ "$enable" = "yes" ] && [ -z "$AUDIO_LAPTOP_IP" ]; then
+        warn "AUDIO_TUNNEL_ENABLE=yes but AUDIO_LAPTOP_IP is empty — disabling the tunnel"
+        enable="no"
+    fi
+
+    log "Audio tunnel: tools + runner + user unit (enable=${enable})"
+    apt_try pulseaudio-utils   # pactl for the runner
+
+    cat > /etc/default/audio-tunnel <<EOF
+# managed by vps-provision.sh
+AT_ENABLE="${enable}"
+AT_USER="${WORK_USER}"
+AT_HOST="${AUDIO_LAPTOP_IP}"
+AT_PORT="${AUDIO_TCP_PORT}"
+EOF
+    chmod 644 /etc/default/audio-tunnel
+
+cat > /usr/local/bin/audio-tunnel.sh <<'EOF'
+#!/usr/bin/env bash
+# audio-tunnel: keeps module-tunnel-sink/source connected to the thin client's
+# PipeWire TCP server and recreates them after disconnects. Static runner;
+# parameters live in /etc/default/audio-tunnel.
+set -u
+CONF="/etc/default/audio-tunnel"
+[ -r "$CONF" ] || exit 0
+. "$CONF"
+[ "${AT_ENABLE:-no}" = "yes" ]      || exit 0
+[ "$(id -un)" = "${AT_USER:-smm}" ] || exit 0
+[ -n "${AT_HOST:-}" ]               || exit 0
+
+SRV="tcp:${AT_HOST}:${AT_PORT:-4713}"
+
+# Module id of this type connected to our server (empty = not loaded).
+mod_id() { pactl list short modules 2>/dev/null              | awk -v s="$SRV" -v m="$1" '$2==m && index($0,s){print $1; exit}'; }
+unload() { local id; id="$(mod_id "$1")"; [ -n "$id" ] && pactl unload-module "$id" 2>/dev/null; }
+
+# The tunnel stream reached the laptop but is orphaned there (Sink: 4294967295 = -1).
+# The stream has node.dont-reconnect=true, so it will never attach by itself;
+# recreate the tunnel instead.
+remote_orphan() {
+    timeout 3 pactl -s "$SRV" list sink-inputs 2>/dev/null     | awk '
+        /^Sink Input #/ { if (blk != "") check(); blk = $0; next }
+                        { blk = blk "
+" $0 }
+        END             { if (blk != "") check() }
+        function check() {
+            if (index(blk, "Tunnel for") && index(blk, "Sink: 4294967295"))
+                print "orphan"
+        }'
+}
+
+fails=0
+while :; do
+    # Local pipewire-pulse is not up yet — wait.
+    pactl info >/dev/null 2>&1 || { sleep 5; continue; }
+
+    # Is the laptop audio server alive? This also catches WireGuard outages.
+    if ! timeout 3 pactl -s "$SRV" info >/dev/null 2>&1; then
+        unload module-tunnel-sink
+        unload module-tunnel-source
+        sleep 5; continue
+    fi
+
+    # Module exists, but sink/source vanished: zombie after a disconnect — reload it.
+    [ -n "$(mod_id module-tunnel-sink)"   ] && ! pactl list short sinks   | grep -qw laptop_out         && unload module-tunnel-sink
+    [ -n "$(mod_id module-tunnel-source)" ] && ! pactl list short sources | grep -qw laptop_mic         && unload module-tunnel-source
+
+    # Without sink=/source=, the tunnel targets the laptop DEFAULT devices, so
+    # HyperX/built-in switching happens on the laptop side transparently.
+    just_loaded=0
+    [ -n "$(mod_id module-tunnel-sink)" ]         || { pactl load-module module-tunnel-sink server="$SRV" sink_name=laptop_out >/dev/null 2>&1
+             just_loaded=1; }
+    [ -n "$(mod_id module-tunnel-source)" ]         || pactl load-module module-tunnel-source server="$SRV" source_name=laptop_mic >/dev/null 2>&1
+
+    # Retry: the stream reached the laptop but did not attach. Reload tunnel-sink
+    # so it is recreated when the laptop's default sink is already alive.
+    # Give a freshly loaded module one loop to link; otherwise this false-triggers.
+    if [ "$just_loaded" -eq 0 ] && [ -n "$(remote_orphan)" ]; then
+        fails=$((fails + 1))
+        logger -t audio-tunnel "laptop stream is orphaned (-1); reloading tunnel-sink (attempt ${fails})"
+        unload module-tunnel-sink
+        if [ "$fails" -ge 5 ]; then
+            logger -t audio-tunnel "5 reloads without success; pausing for 60s"
+            sleep 60; fails=0
+        fi
+        sleep 2; continue
+    fi
+    fails=0
+
+    # VPS defaults: applications play to the laptop and record from its mic.
+    [ "$(pactl get-default-sink   2>/dev/null)" = "laptop_out" ] || pactl set-default-sink   laptop_out 2>/dev/null
+    [ "$(pactl get-default-source 2>/dev/null)" = "laptop_mic" ] || pactl set-default-source laptop_mic 2>/dev/null
+
+    sleep 10
+done
+EOF
+    chmod 755 /usr/local/bin/audio-tunnel.sh
+
+    install -d /etc/systemd/user
+    cat > /etc/systemd/user/audio-tunnel.service <<'EOF'
+[Unit]
+Description=Audio tunnel keeper (tunnel-sink/source -> thin client)
+After=pipewire-pulse.service
+Wants=pipewire-pulse.service
+
+[Service]
+ExecStart=/usr/local/bin/audio-tunnel.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+
+    # Manual tunnel restart button on the WORK_USER desktop.
+    apt_try libnotify-bin   # notify-send for user feedback
+
+    cat > /usr/local/bin/audio-tunnel-restart.sh <<'EOF'
+#!/usr/bin/env bash
+# Manual audio-tunnel restart from the user's session. Restarts the unit, waits
+# for laptop_out to reappear, and reports the result via desktop notification.
+set -u
+notify() { notify-send -i "$1" "Audio tunnel" "$2" 2>/dev/null || true; }
+
+notify audio-card "Restarting audio..."
+systemctl --user restart audio-tunnel.service 2>/dev/null
+
+# The keeper loads tunnel-sink on its first loop; wait up to 20 seconds.
+for _ in $(seq 1 10); do
+    sleep 2
+    if pactl list short sinks 2>/dev/null | grep -qw laptop_out; then
+        notify audio-volume-high "Audio restarted successfully."
+        exit 0
+    fi
+done
+notify dialog-error "Audio did not come back within 20 seconds. Check that the laptop is on, or contact an administrator."
+exit 1
+EOF
+    chmod 755 /usr/local/bin/audio-tunnel-restart.sh
+
+    local desk="/home/${WORK_USER}/Desktop"
+    install -d -o "$WORK_USER" -g "$WORK_USER" -m 755 "$desk"
+    cat > "${desk}/audio-restart.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Restart audio
+Comment=Restart the audio tunnel if sound or microphone disappeared
+Exec=/usr/local/bin/audio-tunnel-restart.sh
+Icon=audio-card
+Terminal=false
+EOF
+    chown "$WORK_USER:$WORK_USER" "${desk}/audio-restart.desktop"
+    chmod 755 "${desk}/audio-restart.desktop"
+
+    if [ "$enable" = "yes" ]; then
+        systemctl --global enable audio-tunnel.service >/dev/null 2>&1 || true
+        # If the WORK_USER session is already live, start it immediately (best effort).
+        systemctl --user -M "${WORK_USER}@" start audio-tunnel.service >/dev/null 2>&1             || log "${WORK_USER} session is not active — the unit will start on next login"
+    else
+        systemctl --global disable audio-tunnel.service >/dev/null 2>&1 || true
+        systemctl --user -M "${WORK_USER}@" stop audio-tunnel.service  >/dev/null 2>&1 || true
+        rm -f "/home/${WORK_USER}/Desktop/audio-restart.desktop"               /usr/local/bin/audio-tunnel-restart.sh
+    fi
+}
+
+#==============================================================================
+# STEP: mlx
+
+#==============================================================================
+# STEP: mlx
 
 #==============================================================================
 # STEP: mlx — Multilogin X Desktop (a local .deb next to the script)
@@ -495,6 +756,59 @@ Put desktop-multiloginx-ubuntu-24.04-amd64.deb next to the script."
     apt-get install -y "$tmp_mlx"
     rm -f "$tmp_mlx"
 }
+
+#==============================================================================
+# STEP: node_exporter — Prometheus metrics, reachable only through wg0
+#     Bind to the concrete WG IP instead of 0.0.0.0. This is the only protection
+#     before firewall automation exists: the port simply does not exist on the
+#     public IP. The address is known from WG_ADDRESS even if the tunnel is not
+#     up yet; the drop-in retries until wg0 has the address.
+#==============================================================================
+step_node_exporter() {
+    if [ "$NODE_EXPORTER_ENABLE" != "yes" ]; then
+        log "node_exporter disabled (NODE_EXPORTER_ENABLE=no) — skipping"
+        return 0
+    fi
+    local wg_ip="${WG_ADDRESS%%/*}"
+    [ -n "$wg_ip" ] || die "node_exporter: WG_ADDRESS is empty; do not know what to bind to"
+
+    log "node_exporter: metrics on ${wg_ip}:${NODE_EXPORTER_PORT} (wg0 only)"
+    # --no-install-recommends avoids the extra *-collectors cron jobs.
+    # On Ubuntu the package lives in universe; enable it and retry if needed.
+    if ! apt-get install -y --no-install-recommends prometheus-node-exporter; then
+        warn "prometheus-node-exporter did not install — trying to enable universe (Ubuntu)"
+        apt_try software-properties-common
+        add-apt-repository -y universe 2>/dev/null || true
+        apt-get update
+        apt-get install -y --no-install-recommends prometheus-node-exporter             || die "prometheus-node-exporter is unavailable — check apt sources"
+    fi
+
+    # Debian/Ubuntu package convention: arguments through /etc/default.
+    ensure_backup /etc/default/prometheus-node-exporter
+    cat > /etc/default/prometheus-node-exporter <<EOF
+# Managed by vps-provision.sh
+ARGS="--web.listen-address=${wg_ip}:${NODE_EXPORTER_PORT}"
+EOF
+
+    # Drop-in: keep retrying bind until WireGuard is up.
+    install -d /etc/systemd/system/prometheus-node-exporter.service.d
+    cat > /etc/systemd/system/prometheus-node-exporter.service.d/override.conf <<'EOF'
+# Managed by vps-provision.sh: wg0 may come up later during boot
+[Unit]
+StartLimitIntervalSec=0
+[Service]
+Restart=always
+RestartSec=5
+EOF
+
+    systemctl daemon-reload
+    systemctl enable prometheus-node-exporter >/dev/null 2>&1         || warn "failed to enable prometheus-node-exporter"
+    systemctl restart prometheus-node-exporter         || warn "node_exporter did not start yet (is the tunnel down?) — it will start after wg0 is up"
+    log "node_exporter enabled. Check from the admin node: curl http://${wg_ip}:${NODE_EXPORTER_PORT}/metrics"
+}
+
+#==============================================================================
+# STEP: display
 
 #==============================================================================
 # STEP: display — Xorg + LightDM + XFCE session on :0 + nxserver restart
@@ -588,6 +902,48 @@ EOF
 }
 
 #==============================================================================
+# STEP: nolock — WORK_USER session does not lock or blank
+#     Remove screen lockers at the package level because they are counterproductive
+#     for this remote-desktop workload. Disable screen blanking through autostart:
+#     the .desktop survives xfconfd state and works even if the session is not
+#     active during provisioning.
+#==============================================================================
+step_nolock() {
+    log "Disabling lock and screen blanking for ${WORK_USER}"
+
+    apt-get -y purge xfce4-screensaver light-locker xscreensaver         >/dev/null 2>&1 || true
+    apt-get -y autoremove >/dev/null 2>&1 || true
+
+    local as_dir="/home/${WORK_USER}/.config/autostart"
+    install -d -o "$WORK_USER" -g "$WORK_USER" -m 755 "$as_dir"
+    cat > "${as_dir}/no-blank.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=No screen blanking
+Comment=managed by vps-provision.sh
+Exec=sh -c "xset s off s noblank -dpms"
+OnlyShowIn=XFCE;
+X-GNOME-Autostart-enabled=true
+EOF
+    chown "$WORK_USER:$WORK_USER" "${as_dir}/no-blank.desktop"
+    chmod 644 "${as_dir}/no-blank.desktop"
+
+    # If the WORK_USER session is live, turn off DPMS in xfce4-power-manager now
+    # through that user's DBus session (best effort). Otherwise autostart handles
+    # the next login.
+    local uid dbus
+    uid="$(id -u "$WORK_USER" 2>/dev/null)" || return 0
+    if pgrep -u "$WORK_USER" xfce4-session >/dev/null 2>&1; then
+        dbus="unix:path=/run/user/${uid}/bus"
+        sudo -u "$WORK_USER" DBUS_SESSION_BUS_ADDRESS="$dbus" xfconf-query             -c xfce4-power-manager -p /xfce4-power-manager/dpms-enabled             -n -t bool -s false 2>/dev/null || true
+        sudo -u "$WORK_USER" DBUS_SESSION_BUS_ADDRESS="$dbus" xfconf-query             -c xfce4-power-manager -p /xfce4-power-manager/blank-on-ac             -n -t int -s 0 2>/dev/null || true
+    fi
+}
+
+#==============================================================================
+# STEP: shortcuts
+
+#==============================================================================
 # STEP: shortcuts — desktop shortcuts for user smm
 #     Placing .desktop files for the apps smm actually launches:
 #     Firefox, Multilogin X, Telegram.
@@ -639,7 +995,7 @@ step_summary() {
     echo "  Users:         ${ADMIN_USER} (sudo), ${WORK_USER} (no privileges)"
     echo "  Desktop:       XFCE, Windows-10 theme (B00merang ${WIN10_THEME_COMMIT:0:7}), fallback Arc/Papirus"
     echo "  Locales:       ${LOCALES[*]} (LANG=${LOCALES[0]})"
-    echo "  Software:      Firefox, Telegram, Multilogin X, NoMachine, WireGuard"
+    echo "  Software:      Firefox, Telegram, Teams, Multilogin X, NoMachine, WireGuard"
     echo
     echo "  This VPS's WireGuard public key (add it as a peer on the server):"
     echo "    $(cat /etc/wireguard/vps_public.key 2>/dev/null || echo '— not found (has the wireguard step not been run yet?)')"
@@ -648,6 +1004,13 @@ step_summary() {
     else
         echo "  Tunnel:        NOT configured — fill in WG_SERVER_PUBKEY/WG_SERVER_ENDPOINT"
         echo "                 and rerun:  sudo bash $0 wireguard"
+    fi
+    if [ "$NODE_EXPORTER_ENABLE" = "yes" ]; then
+        echo "  Monitoring:    node_exporter on ${WG_ADDRESS%%/*}:${NODE_EXPORTER_PORT} (wg0 only; public IP not listening)."
+        echo "                 Add the VPS to /etc/prometheus/targets/fleet.json on the admin node (type: vps)."
+    fi
+    if [ "$AUDIO_TUNNEL_ENABLE" = "yes" ] && [ -n "$AUDIO_LAPTOP_IP" ]; then
+        echo "  Audio tunnel:  ${AUDIO_LAPTOP_IP}:${AUDIO_TCP_PORT} (WORK_USER session, PipeWire TCP)."
     fi
     echo
     warn "IMPORTANT — what this script has NOT done (planned as the next step):"
@@ -665,7 +1028,7 @@ step_summary() {
 #     is always canonical (dependencies: users before display, nomachine before
 #     display, etc.).
 #==============================================================================
-STEPS=(base desktop users firefox telegram wireguard nomachine mlx display shortcuts summary)
+STEPS=(base desktop users firefox telegram teams wireguard nomachine audio mlx node_exporter display nolock shortcuts summary)
 
 usage() {
     echo "Usage: sudo bash $0 [step ...]"

@@ -20,6 +20,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REMOTE_PROVISION_NAME="vps-provision.sh"
 VPS_OCTET_MIN="${VPS_OCTET_MIN:-101}"
 VPS_OCTET_MAX="${VPS_OCTET_MAX:-200}"
+LAPTOP_OCTET_MIN="${LAPTOP_OCTET_MIN:-6}"
+LAPTOP_OCTET_MAX="${LAPTOP_OCTET_MAX:-99}"
 
 CTL_PATH=""
 VPS_IP=""
@@ -127,6 +129,8 @@ remote_env_command() {
         ADMIN_USER ADMIN_PASS WORK_USER WORK_PASS TIMEZONE
         WG_ADDRESS WG_SERVER_PUBKEY WG_SERVER_ENDPOINT WG_ALLOWED_IPS WG_KEEPALIVE
         NOMACHINE_BRANCH NOMACHINE_VERSION NOMACHINE_BUILD
+        AUDIO_TUNNEL_ENABLE AUDIO_LAPTOP_IP AUDIO_TCP_PORT
+        NODE_EXPORTER_ENABLE NODE_EXPORTER_PORT
         WIN10_THEME_COMMIT WIN10_ICONS_COMMIT
     )
     for name in "${names[@]}"; do
@@ -150,7 +154,8 @@ printf '%s\n' "You will need:"
 printf '%s\n' "  1. New VPS public IP address (clean Ubuntu 24/Debian 13)."
 printf '%s\n' "  2. VPS root password from the hosting provider."
 printf '%s\n' "  3. Free VPS address in the WireGuard tunnel range."
-printf '     Default allowed last octet range: %s-%s.\n' "$VPS_OCTET_MIN" "$VPS_OCTET_MAX"
+printf '%s\n' "  4. Optional paired thin-client laptop number for the audio tunnel."
+printf '     Default allowed VPS last-octet range: %s-%s.\n' "$VPS_OCTET_MIN" "$VPS_OCTET_MAX"
 printf '\n'
 printf '%s\n' "A full rollout usually takes 20-40 minutes. Do not close this window."
 printf '\n'
@@ -202,6 +207,11 @@ ADMIN_PASS="${ADMIN_PASS:-$(extract_default ADMIN_PASS "$PROVISION")}"; export A
 WORK_PASS="${WORK_PASS:-$(extract_default WORK_PASS "$PROVISION")}"; export WORK_PASS
 WG_ALLOWED_IPS="${WG_ALLOWED_IPS:-$(extract_default WG_ALLOWED_IPS "$PROVISION")}"; export WG_ALLOWED_IPS
 WG_KEEPALIVE="${WG_KEEPALIVE:-$(extract_default WG_KEEPALIVE "$PROVISION")}"; export WG_KEEPALIVE
+AUDIO_TUNNEL_ENABLE="${AUDIO_TUNNEL_ENABLE:-$(extract_default AUDIO_TUNNEL_ENABLE "$PROVISION")}"; export AUDIO_TUNNEL_ENABLE
+AUDIO_LAPTOP_IP="${AUDIO_LAPTOP_IP:-$(extract_default AUDIO_LAPTOP_IP "$PROVISION")}"; export AUDIO_LAPTOP_IP
+AUDIO_TCP_PORT="${AUDIO_TCP_PORT:-$(extract_default AUDIO_TCP_PORT "$PROVISION")}"; export AUDIO_TCP_PORT
+NODE_EXPORTER_ENABLE="${NODE_EXPORTER_ENABLE:-$(extract_default NODE_EXPORTER_ENABLE "$PROVISION")}"; export NODE_EXPORTER_ENABLE
+NODE_EXPORTER_PORT="${NODE_EXPORTER_PORT:-$(extract_default NODE_EXPORTER_PORT "$PROVISION")}"; export NODE_EXPORTER_PORT
 
 [[ -n "$CUR_WG" ]] || die "WG_ADDRESS was not found in the provisioner; is this the expected script version?"
 
@@ -291,6 +301,49 @@ fi
 export TIMEZONE
 
 #------------------------------------------------------------------------------
+# Question 4: paired thin client for the audio tunnel
+#------------------------------------------------------------------------------
+AUDIO_TCP_PORT="${AUDIO_TCP_PORT:-4713}"
+NODE_EXPORTER_ENABLE="${NODE_EXPORTER_ENABLE:-yes}"
+NODE_EXPORTER_PORT="${NODE_EXPORTER_PORT:-9100}"
+printf '\nPaired thin-client laptop for the audio tunnel.\n'
+printf '%s\n' "The VPS will play sound on that laptop and record from its microphone."
+printf 'Laptop last-octet range: %s-%s. Enter skips the audio tunnel.\n' "$LAPTOP_OCTET_MIN" "$LAPTOP_OCTET_MAX"
+if [[ -n "${AUDIO_LAPTOP_IP:-}" ]]; then
+    printf 'Current AUDIO_LAPTOP_IP from local env/provisioner: %s\n' "$AUDIO_LAPTOP_IP"
+fi
+printf '\n'
+AUDIO_OCTET=""
+while :; do
+    read -r -p "Paired laptop last octet (${LAPTOP_OCTET_MIN}-${LAPTOP_OCTET_MAX}), Enter skips: " AUDIO_OCTET
+    AUDIO_OCTET="$(trim "$AUDIO_OCTET")"
+    if [[ -z "$AUDIO_OCTET" ]]; then
+        if [[ -n "${AUDIO_LAPTOP_IP:-}" && "${AUDIO_TUNNEL_ENABLE:-yes}" = "yes" ]]; then
+            printf '[!] Keeping existing AUDIO_LAPTOP_IP: %s\n' "$AUDIO_LAPTOP_IP"
+            AUDIO_TUNNEL_ENABLE="yes"
+        else
+            AUDIO_TUNNEL_ENABLE="no"
+            AUDIO_LAPTOP_IP=""
+            printf '%s\n' "[!] Audio tunnel will be skipped."
+        fi
+        break
+    fi
+    if [[ ! "$AUDIO_OCTET" =~ ^[0-9]+$ ]]; then
+        printf 'Expected a number.\n\n'
+        continue
+    fi
+    if (( 10#$AUDIO_OCTET < LAPTOP_OCTET_MIN || 10#$AUDIO_OCTET > LAPTOP_OCTET_MAX )); then
+        printf 'Octet %s is outside the laptop range (%s-%s).\n\n' "$AUDIO_OCTET" "$LAPTOP_OCTET_MIN" "$LAPTOP_OCTET_MAX"
+        continue
+    fi
+    AUDIO_OCTET=$(( 10#$AUDIO_OCTET ))
+    AUDIO_LAPTOP_IP="${WG_PREFIX}.${AUDIO_OCTET}"
+    AUDIO_TUNNEL_ENABLE="yes"
+    break
+done
+export AUDIO_TUNNEL_ENABLE AUDIO_LAPTOP_IP AUDIO_TCP_PORT NODE_EXPORTER_ENABLE NODE_EXPORTER_PORT
+
+#------------------------------------------------------------------------------
 # Secrets and optional WireGuard server settings
 #------------------------------------------------------------------------------
 prompt_secret_if_needed ADMIN_PASS "Initial password for admin user ${ADMIN_USER:-admin}"
@@ -313,6 +366,8 @@ printf '%s\n' "CHECK BEFORE STARTING:"
 printf '  VPS:              root@%s\n' "$VPS_IP"
 printf '  WireGuard address:%s\n' "$WG_ADDRESS"
 printf '  Timezone:         %s\n' "${TIMEZONE:-<do not change>}"
+printf '  Audio tunnel:     %s\n' "$([ "$AUDIO_TUNNEL_ENABLE" = "yes" ] && echo "to laptop ${AUDIO_LAPTOP_IP}" || echo "disabled")"
+printf '  node_exporter:    %s\n' "$([ "$NODE_EXPORTER_ENABLE" = "yes" ] && echo "enabled on WG IP:${NODE_EXPORTER_PORT}" || echo "disabled")"
 printf '  Provisioner:      %s\n' "$PROVISION"
 printf '  Multilogin .deb:  %s\n' "$(basename "$MLX_DEB")"
 printf '%s\n' "=================================================="
@@ -407,6 +462,13 @@ printf '%s\n' "   bash ~/Desktop/xfce-win10.sh"
 printf '\n'
 printf '%s\n' "3. If the provisioner reported that a reboot is required, reboot the VPS:"
 printf '   ssh root@%s reboot\n' "$VPS_IP"
+if [[ "$AUDIO_TUNNEL_ENABLE" == "yes" ]]; then
+    printf '\n'
+    printf '4. Audio tunnel is configured for laptop %s. It starts when:\n' "$AUDIO_LAPTOP_IP"
+    printf '%s\n' "   the laptop is provisioned with local-provision, WireGuard is up on both sides,"
+    printf '%s\n' "   and the worker user is logged in on both machines. Check on the VPS as worker:"
+    printf '%s\n' "     pactl list short sinks | grep laptop_out"
+fi
 printf '\n'
 printf '%s\n' "REMEMBER: VPS firewall automation is not implemented yet. NoMachine port 4000"
 printf '%s\n' "may be exposed on the public IP until you restrict it manually."

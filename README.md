@@ -63,8 +63,9 @@ ansible-playbook site.yml -K --ask-vault-pass --check --diff --limit tc-05
                  │ VPS desktop                                  │
                  │ - XFCE + LightDM/Xorg                        │
                  │ - NoMachine server                           │
-                 │ - Firefox / Telegram / Multilogin X          │
-                 │ - WireGuard client tooling                    │
+                 │ - Firefox / Telegram / Teams / Multilogin X   │
+                 │ - WireGuard client + audio tunnel keeper       │
+                 │ - node_exporter on WireGuard only              │
                  └───────────────────▲──────────────────────────┘
                                      │ NoMachine over LAN/WG
                                      │
@@ -175,6 +176,8 @@ It maps the bash `scripts/vps-provision.sh` flow into roles:
 
 This Ansible path still keeps the same major operational gap as the script path: firewall policy is not configured yet, so public NoMachine exposure must be closed manually until the next hardening step is added.
 
+The script-based VPS rollout is currently ahead of this first Ansible slice for the v2.3 additions: Teams, the paired-laptop audio tunnel, WireGuard-only node_exporter, and no-lock/no-blank handling are implemented in `scripts/vps-provision.sh` first.
+
 ### `ansible/thin-client/`
 
 First Ansible migration slice for physical thin-client provisioning.
@@ -205,8 +208,12 @@ It installs and configures:
 - NoMachine server;
 - Firefox from Mozilla's APT repository;
 - Telegram Desktop, with Flatpak fallback;
+- Teams via teams-for-linux;
 - Multilogin X Desktop from a local `.deb` placed next to the script;
 - WireGuard client tooling, keypair generation, and optional `wg0` setup;
+- PipeWire audio tunnel keeper to a paired thin-client laptop;
+- Prometheus node_exporter bound to the WireGuard IP only;
+- LightDM/worker-session no-lock/no-blank behavior;
 - users: admin user with sudo and worker user without sudo;
 - desktop shortcuts for the worker user.
 
@@ -221,6 +228,9 @@ Important notes:
 - The default sanitized VPS tunnel address is `10.8.0.101/24`; adjust `WG_ADDRESS` per VPS and keep each address unique.
 - The WireGuard server-side peer still has to be added outside this script.
 - The LightDM display step enables autologin for the worker user so NoMachine reconnects enter the XFCE desktop without a greeter password prompt.
+- The `audio` step installs a worker-session keeper for `laptop_out`/`laptop_mic` via PipeWire TCP to a paired thin client.
+- The `node_exporter` step binds metrics to the VPS WireGuard IP only and retries until wg0 is up.
+- The `nolock` step removes lockers and disables screen blanking for remote-desktop sessions.
 - It does **not** configure the firewall yet. After the first rollout, NoMachine may listen on port `4000` on the public interface until you close it manually.
 - The Multilogin `.deb` is intentionally not committed. Put it next to `scripts/vps-provision.sh` before running:
 
@@ -236,10 +246,10 @@ It:
 
 - finds the provisioner in the repository layout or in a flat exported installer directory;
 - loads optional local `.env.vps-provision` values;
-- asks for the new VPS public IP, WireGuard last octet, and timezone;
+- asks for the new VPS public IP, WireGuard last octet, timezone, and optional paired-laptop audio tunnel number;
 - prompts for initial user passwords if they are not already set locally;
 - copies the provisioner and Multilogin `.deb` to `/root/` on the VPS;
-- runs the provisioner over SSH with the selected values passed as environment variables;
+- runs the provisioner over SSH with the selected values passed as environment variables, including optional audio tunnel and node_exporter settings;
 - optionally copies `xfce-win10.sh` to the worker user's desktop.
 
 The desktop shortcut `scripts/admin/vps-provision-launcher.desktop` expects to live next to the launcher script.
