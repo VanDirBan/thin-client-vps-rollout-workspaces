@@ -55,6 +55,14 @@ WG_ENDPOINT="${WG_ENDPOINT:-REPLACE_WITH_VPS_ENDPOINT:51820}"
 WG_ALLOWED="${WG_ALLOWED:-0.0.0.0/0, ::/0}"
 WG_KEEPALIVE="${WG_KEEPALIVE:-25}"
 WG_GATEWAY="${WG_GATEWAY:-10.8.0.1}"       # used only in operator-facing checks/messages
+
+# --- Audio tunnel (PipeWire) --------------------------------------------------
+# The laptop is the TCP audio server (module-native-protocol-tcp). The paired VPS
+# plays to its default sink and records from its default source. The module lives
+# in the service user's pipewire-pulse config, so it survives reboots and service restarts.
+AUDIO_TCP_PORT="${AUDIO_TCP_PORT:-4713}"
+AUDIO_ALLOWED_IPS="${AUDIO_ALLOWED_IPS:-127.0.0.1;10.8.0.0/24}"   # auth-ip-acl: localhost + the WG subnet
+
 # DNS through the tunnel (uncomment in wg0.conf below if the VPS has a resolver).
 
 # Auto-start the tunnel on boot + watchdog (retries). "yes" = enable, "no" = only
@@ -76,6 +84,13 @@ NOMACHINE_MD5="${NOMACHINE_MD5:-8af5efe7b8ad3872a4681c4acf551b62}"   # empty "" 
 # doesn't protect against anything. New build released — update NOMACHINE_* and MD5 deliberately.
 NOMACHINE_URL="https://download.nomachine.com/download/${NOMACHINE_BRANCH}/Linux/nomachine_${NOMACHINE_VERSION}_${NOMACHINE_BUILD}_amd64.deb"
 
+# --- Pre-configured NoMachine connection to the paired VPS desktop ------------
+# yes + NX_VPS_HOST => the desktop shortcut opens a fullscreen session to that VPS
+# using a generated .nxs file. Otherwise the shortcut launches bare nxplayer.
+NX_CONNECT_ENABLE="${NX_CONNECT_ENABLE:-yes}"
+NX_VPS_HOST="${NX_VPS_HOST:-}"                 # paired VPS WG address, e.g. 10.8.0.101
+NX_VPS_PORT="${NX_VPS_PORT:-4000}"
+
 # --- x11vnc: fallback access to the PHYSICAL laptop screen, bypassing NoMachine.
 #     It listens only on the IPv4 address assigned to ${WG_IFACE}; there is no LAN/public fallback.
 #     Classic VNC uses exactly 8 password characters, so keep the default/prompted value at 8 chars.
@@ -84,6 +99,12 @@ X11VNC_PASSWORD="${X11VNC_PASSWORD:-CHANGEME}"            # weak rollout default
 X11VNC_PORT="${X11VNC_PORT:-5900}"
 X11VNC_DISPLAY="${X11VNC_DISPLAY:-:0}"                    # physical X display managed by LightDM
 X11VNC_PASS_FILE="${X11VNC_PASS_FILE:-/etc/x11vnc.pass}"
+
+# --- node_exporter: hardware/OS metrics for Prometheus on the admin node.
+#     It binds only to this machine's WireGuard address, not to LAN/public interfaces.
+#     With a default-drop killswitch, also allow: iifname "wg0" tcp dport 9100 accept.
+NODE_EXPORTER_ENABLE="${NODE_EXPORTER_ENABLE:-yes}"
+NODE_EXPORTER_PORT="${NODE_EXPORTER_PORT:-9100}"
 
 # --- Windows-10 theme (B00merang): PINNED to specific commits, not master.
 #     Otherwise fleet machines rolled out on different days would get different theme versions.
@@ -359,12 +380,14 @@ step_desktop() {
     log "Required packages for the Windows-10 look"
     apt-get install -y \
         xfce4-whiskermenu-plugin \
+        xfce4-pulseaudio-plugin \
         gtk2-engines-murrine \
         gvfs gvfs-daemons \
         fonts-noto fonts-noto-color-emoji fonts-liberation \
         curl unzip
-        # whiskermenu — the "Start" button; murrine — renders the GTK2 part of the
-        # B00merang theme; gvfs — Trash/removable media on the desktop.
+        # whiskermenu — the "Start" button; pulseaudio plugin — volume tray widget
+        # and multimedia keys; murrine — renders the GTK2 part of the B00merang theme;
+        # gvfs — Trash/removable media on the desktop.
 
     log "Windows-10 theme (B00merang, pinned to a commit) into system directories"
     install_win10_look
@@ -384,21 +407,83 @@ step_desktop() {
 }
 
 #==============================================================================
-# STEP audio — PipeWire + pulse-shim + client utilities (needed for the .md procedure)
+# STEP audio — PipeWire + pulse-shim + client utilities + TCP audio tunnel
 #==============================================================================
 step_audio() {
     log "PipeWire + pipewire-pulse + pactl/paplay/parecord utilities + pavucontrol"
     apt-get install -y \
         pipewire pipewire-pulse pipewire-audio wireplumber \
         pulseaudio-utils pavucontrol
-    # Audio is needed specifically by SVC_USER — it runs the XFCE session and drives the audio tunnel.
+
+    # Audio is needed specifically by SVC_USER — it runs the XFCE session and owns the audio tunnel.
     if id -u "$SVC_USER" >/dev/null 2>&1; then
         usermod -aG audio,video "$SVC_USER"
         log "$SVC_USER added to the audio,video groups"
     else
-        warn "$SVC_USER not found — audio,video groups not granted"
+        warn "$SVC_USER not found — audio,video groups not granted and the audio tunnel was not configured"
+        return 0
     fi
-    # The tunnel modules themselves are loaded manually per your .md, AFTER bringing up WG.
+
+    # PipeWire TCP input lives only in SVC_USER's home. A system-wide fragment in /etc
+    # makes every user's pipewire-pulse load it, so adams and smm can race for the same port.
+    # We listen on 0.0.0.0 because wg0 may not exist at session start; auth-ip-acl restricts access.
+    log "Audio tunnel: pipewire-pulse (${SVC_USER}) listening on :${AUDIO_TCP_PORT} (ACL: ${AUDIO_ALLOWED_IPS})"
+    local pw_dir svc_home
+    svc_home="$(getent passwd "$SVC_USER" | cut -d: -f6)"
+    pw_dir="${svc_home}/.config/pipewire/pipewire-pulse.conf.d"
+    install -d -o "$SVC_USER" -g "$SVC_USER" -m 755 "$pw_dir"
+    cat > "${pw_dir}/50-wg-audio.conf" <<EOF
+# Managed by local-provision.sh
+pulse.cmd = [
+    { cmd = "load-module"
+      args = "module-native-protocol-tcp listen=0.0.0.0 port=${AUDIO_TCP_PORT} auth-ip-acl=${AUDIO_ALLOWED_IPS}" }
+]
+EOF
+    chown "$SVC_USER:$SVC_USER" "${pw_dir}/50-wg-audio.conf"
+    chmod 644 "${pw_dir}/50-wg-audio.conf"
+
+    # Legacy cleanup: the system-wide variant caused two user instances to race for the port.
+    rm -f /etc/pipewire/pipewire-pulse.conf.d/50-wg-audio.conf
+
+    # If SVC_USER already has a live session, try to pick up the config immediately.
+    # On a fresh rollout there is no session yet, so it will load on first XFCE login.
+    systemctl --user -M "${SVC_USER}@" restart pipewire-pulse >/dev/null 2>&1 \
+        || log "${SVC_USER} session not active — config will take effect on first XFCE login"
+}
+
+#==============================================================================
+# STEP audioprio — force the built-in audio card to start in duplex mode
+#   Fixes the output-only profile where no audio source exists and the microphone
+#   (including a 3.5mm headset) is dead. The conf.d rule sets the startup profile;
+#   jack detection can still pick the active port afterward.
+#==============================================================================
+step_audioprio() {
+    log "WirePlumber: duplex profile rule for built-in audio card"
+
+    install -d -m 755 /etc/wireplumber/wireplumber.conf.d
+    cat > /etc/wireplumber/wireplumber.conf.d/50-analog-duplex.conf <<'EOF'
+# Managed by local-provision.sh
+# Built-in Realtek: force duplex profile on start so PipeWire does not come up output-only.
+# Matching by alsa.mixer_name survives PCI path or hardware model changes.
+monitor.alsa.rules = [
+  {
+    matches = [ { alsa.mixer_name = "~Realtek.*" } ]
+    actions = { update-props = { device.profile = "output:analog-stereo+input:analog-stereo" } }
+  }
+]
+EOF
+
+    # If the user session is live, best-effort apply the duplex profile right now.
+    # HDMI cards will silently reject this profile; the Realtek card should apply it.
+    if pgrep -u "$SVC_USER" wireplumber >/dev/null 2>&1; then
+        local card
+        for card in $(systemd-run --quiet --pipe --machine="${SVC_USER}@" --user \
+                          pactl list short cards 2>/dev/null | awk '{print $2}'); do
+            systemd-run --quiet --pipe --machine="${SVC_USER}@" --user \
+                pactl set-card-profile "$card" \
+                output:analog-stereo+input:analog-stereo 2>/dev/null || true
+        done
+    fi
 }
 
 #==============================================================================
@@ -680,6 +765,47 @@ EOF
 }
 
 #==============================================================================
+# STEP node_exporter — Prometheus metrics bound only to the WireGuard address
+#   Binding to the concrete wg IP means the port does not exist on LAN/public interfaces.
+#   Until the tunnel is up, the bind fails and systemd retries every 5s (same pattern as x11vnc).
+#==============================================================================
+step_node_exporter() {
+    if [ "$NODE_EXPORTER_ENABLE" != "yes" ]; then
+        log "node_exporter disabled (NODE_EXPORTER_ENABLE=no) — skipping"
+        return 0
+    fi
+
+    local wg_ip="${WG_CLIENT_ADDR%%/*}"
+    [ -n "$wg_ip" ] || die "node_exporter: WG_CLIENT_ADDR is empty; cannot choose a bind address"
+
+    log "node_exporter: metrics on ${wg_ip}:${NODE_EXPORTER_PORT} (${WG_IFACE} only)"
+    # --no-install-recommends avoids extra collector cron packages; add those deliberately if needed.
+    apt-get install -y --no-install-recommends prometheus-node-exporter
+
+    ensure_backup /etc/default/prometheus-node-exporter
+    cat > /etc/default/prometheus-node-exporter <<EOF
+# Managed by local-provision.sh
+ARGS="--web.listen-address=${wg_ip}:${NODE_EXPORTER_PORT}"
+EOF
+
+    install -d /etc/systemd/system/prometheus-node-exporter.service.d
+    cat > /etc/systemd/system/prometheus-node-exporter.service.d/override.conf <<'EOF'
+# Managed by local-provision.sh: wg0 may come up after this service on boot
+[Unit]
+StartLimitIntervalSec=0
+[Service]
+Restart=always
+RestartSec=5
+EOF
+
+    systemctl daemon-reload
+    systemctl enable prometheus-node-exporter >/dev/null 2>&1 || warn "failed to enable prometheus-node-exporter"
+    systemctl restart prometheus-node-exporter \
+        || warn "node_exporter did not start (tunnel not up?) — it should start automatically after wg0 is up"
+    log "node_exporter: enabled; verify from the admin node: curl http://${wg_ip}:${NODE_EXPORTER_PORT}/metrics"
+}
+
+#==============================================================================
 # STEP win10_script — copy xfce-win10.sh to the service user's desktop.
 #   Apply it LATER as that user, in an active XFCE session.
 #==============================================================================
@@ -741,13 +867,38 @@ EOF
         \( -iname 'nxplayer*.png' -o -iname 'nxplayer*.svg' \
            -o -iname 'nomachine*.png' -o -iname 'nomachine*.svg' \) 2>/dev/null | head -n1)"
     [ -z "$nm_icon" ] && nm_icon="nxplayer"
+
+    # Optional pre-configured .nxs session: the shortcut opens the paired VPS fullscreen.
+    # The client will ask for credentials/trust on first connect and saves them in this file.
+    local nm_exec="/usr/NX/bin/nxplayer"
+    if [ "$NX_CONNECT_ENABLE" = "yes" ] && [ -n "$NX_VPS_HOST" ]; then
+        local nxs_dir="${svc_home}/.local/share/nomachine"
+        install -d -o "$SVC_USER" -g "$SVC_USER" "$nxs_dir"
+        cat > "${nxs_dir}/VPS.nxs" <<EOF
+<!DOCTYPE NXClientSettings>
+<NXClientSettings application="nxclient" version="2.1">
+  <group name="General">
+    <option key="Server host" value="${NX_VPS_HOST}" />
+    <option key="Server port" value="${NX_VPS_PORT}" />
+    <option key="Session window state" value="fullscreen" />
+  </group>
+</NXClientSettings>
+EOF
+        chown "${SVC_USER}:${SVC_USER}" "${nxs_dir}/VPS.nxs"
+        chmod 600 "${nxs_dir}/VPS.nxs"
+        nm_exec="/usr/NX/bin/nxplayer --session ${nxs_dir}/VPS.nxs"
+        log "Pre-configured NoMachine connection: ${nxs_dir}/VPS.nxs (${NX_VPS_HOST}:${NX_VPS_PORT}, fullscreen)"
+    elif [ "$NX_CONNECT_ENABLE" = "yes" ]; then
+        warn "NX_CONNECT_ENABLE=yes but NX_VPS_HOST is empty — shortcut will launch bare nxplayer"
+    fi
+
     cat > "$nm_dst" <<EOF
 [Desktop Entry]
 Version=1.0
 Type=Application
 Name=NoMachine
 Comment=Connect to the remote desktop
-Exec=/usr/NX/bin/nxplayer
+Exec=${nm_exec}
 Icon=${nm_icon}
 Terminal=false
 Categories=Network;RemoteAccess;
@@ -914,7 +1065,7 @@ step_summary() {
     echo "  Hostname:     $(cat /etc/hostname 2>/dev/null || hostname)"
     echo "  Desktop:      XFCE, login via lightdm (manual)."
     echo "  Power:        screen stays on for greeter and ${SVC_USER}; local lock disabled for ${SVC_USER}."
-    echo "  Software:     NoMachine (client+server), WireGuard, PipeWire+utilities, NetworkManager, x11vnc."
+    echo "  Software:     NoMachine (client+server), WireGuard, PipeWire+audio tunnel, NetworkManager, x11vnc, node_exporter."
     echo
     echo "  >>> THIS CLIENT'S PUBLIC KEY (add as a [Peer] on the WG server):"
     echo "      $client_pub"
@@ -933,9 +1084,21 @@ step_summary() {
     else
         echo "      Units installed but disabled. To enable:  sudo systemctl enable --now wg-quick@${WG_IFACE} wg-watchdog.timer"
     fi
-    echo "   4) Audio tunnel — configure after WG is working."
-    echo "   5) Launch NoMachine and add a connection to the matching VPS desktop."
+    echo "   4) Audio tunnel starts automatically with pipewire-pulse in the ${SVC_USER} session."
+    echo "      Port: ${AUDIO_TCP_PORT}; ACL: ${AUDIO_ALLOWED_IPS}."
+    echo "      Verify after login with WG up:  pactl list short modules | grep native-protocol-tcp"
+    echo "      If a killswitch drops inbound traffic, allow: iifname \"${WG_IFACE}\" tcp dport ${AUDIO_TCP_PORT} accept"
+    echo "   5) Launch NoMachine from the ${SVC_USER} desktop shortcut."
+    if [ "$NX_CONNECT_ENABLE" = "yes" ] && [ -n "$NX_VPS_HOST" ]; then
+        echo "      It opens a fullscreen session to ${NX_VPS_HOST}:${NX_VPS_PORT}."
+    else
+        echo "      Add the matching VPS connection manually: host = VPS WireGuard address, protocol NX."
+    fi
     echo "   6) Log in to XFCE as ${SVC_USER} and apply the look:   bash ~/Desktop/xfce-win10.sh   (NOT as root)."
+    if [ "$NODE_EXPORTER_ENABLE" = "yes" ]; then
+        echo "   7) From the admin node, verify metrics: curl http://${wg_peer_ip}:${NODE_EXPORTER_PORT}/metrics"
+        echo "      Add this machine to Prometheus targets after confirming the endpoint."
+    fi
     echo
     echo "   Watchdog diagnostics:  journalctl -t wg-watchdog -n 30   |   systemctl list-timers wg-watchdog.timer"
     echo "   Rollout log:           $LOG  (root:${ADMIN_GROUP}, 640)"
@@ -969,10 +1132,12 @@ STEPS=(
     upgrade
     desktop
     audio
+    audioprio
     wireguard
     watchdog
     nomachine
     x11vnc
+    node_exporter
     win10_script
     nm_shortcut
     power

@@ -259,13 +259,15 @@ It prepares a Debian 13/XFCE machine with:
 - GRUB/kernel boot options relevant to the target hardware;
 - APT sources and package upgrade;
 - XFCE desktop stack;
-- audio stack;
+- PipeWire audio stack and WireGuard-side TCP audio tunnel;
+- WirePlumber duplex profile rule for the built-in audio card;
 - WireGuard full tunnel client config;
 - WireGuard watchdog timer;
 - NoMachine package;
 - x11vnc fallback bound to the WireGuard interface only;
+- Prometheus node_exporter bound to the WireGuard IP only;
 - copied `xfce-win10.sh` helper;
-- NoMachine desktop shortcut;
+- NoMachine desktop shortcut, optionally preconfigured for the paired VPS;
 - power/lock settings so the service user's screen does not blank or lock;
 - WorkMon worker agent installation from `scripts/workmon-agent-0.4.0/`.
 
@@ -278,7 +280,7 @@ Important WireGuard note:
 
 If `WG_AUTOSTART=yes` is used before the corresponding peer is configured on the WireGuard server/firewall, the laptop may boot into a full-tunnel route with no working connectivity. Either configure the server peer first or use `WG_AUTOSTART=no` during initial staging.
 
-`local-provision-launcher.sh` is the recommended routine entrypoint for laptop rollout. It loads optional ignored `.env.local-provision` values, asks for the laptop tunnel number, hostname, and optional x11vnc password, then runs `local-provision.sh` with environment overrides. The desktop shortcut expects to live next to the launcher script.
+`local-provision-launcher.sh` is the recommended routine entrypoint for laptop rollout. It loads optional ignored `.env.local-provision` values, asks for the laptop tunnel number, hostname, optional x11vnc password, and optional paired VPS number, then runs `local-provision.sh` with environment overrides. The desktop shortcut expects to live next to the launcher script.
 
 Detailed operator flow is in `docs/local-provision-admin-guide.md`.
 
@@ -297,8 +299,9 @@ It:
 - optionally loads ignored `.env.local-provision` values;
 - asks for a laptop tunnel number or full CIDR address;
 - rejects the configured VPS address range for laptop allocation;
-- asks for hostname and optional x11vnc password;
+- asks for hostname, optional x11vnc password, and optional paired VPS number;
 - supports full rollout or selected `ONLY=` steps;
+- passes audio tunnel, node_exporter, and NoMachine preconfigured-session settings through environment variables;
 - warns if WireGuard server details or collector SSH public key are still placeholders.
 
 The matching `.desktop` file is for a prepared desktop/USB folder and expects to live next to the launcher.
@@ -320,6 +323,7 @@ It configures:
 - double-click in Thunar;
 - desktop icons;
 - dark bottom panel/taskbar;
+- volume tray widget and multimedia-key support;
 - clock layout;
 - basic self-diagnostics.
 

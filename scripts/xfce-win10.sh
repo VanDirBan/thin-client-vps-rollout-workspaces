@@ -12,6 +12,8 @@
 #   • Computer/Trash/Home icons on the desktop
 #   • window tiling when dragged to the edge (Aero Snap with the mouse)
 #   • dark bottom taskbar panel, light windows via the Windows-10 theme
+#   • volume widget in the tray (left of the clock) + multimedia keys
+#     (requires xfce4-pulseaudio-plugin, installed by local-provision.sh)
 #
 # Run it AS YOUR OWN user in an active graphical XFCE session (can be over SSH):
 #     bash xfce-win10.sh
@@ -218,6 +220,7 @@ cat > "$CFG/xfce4-panel.xml" <<'PANEL_XML'
         <value type="int" value="2"/>
         <value type="int" value="3"/>
         <value type="int" value="4"/>
+        <value type="int" value="7"/>
         <value type="int" value="5"/>
         <value type="int" value="6"/>
       </property>
@@ -244,6 +247,13 @@ cat > "$CFG/xfce4-panel.xml" <<'PANEL_XML'
     </property>
     <property name="plugin-4" type="string" value="systray">
       <property name="square-icons" type="bool" value="true"/>
+    </property>
+    <!-- Volume widget left of the clock, Windows-like. enable-keyboard-shortcuts
+         lets the plugin handle laptop XF86Audio* keys. -->
+    <property name="plugin-7" type="string" value="pulseaudio">
+      <property name="enable-keyboard-shortcuts" type="bool" value="true"/>
+      <property name="show-notifications" type="bool" value="true"/>
+      <property name="mixer-command" type="string" value="pavucontrol"/>
     </property>
     <property name="plugin-5" type="string" value="clock"/>
     <property name="plugin-6" type="string" value="showdesktop"/>
@@ -279,6 +289,8 @@ ls /usr/lib/*/gtk-2.0/*/engines/libmurrine.so >/dev/null 2>&1 \
   || echo "  [!] gtk2-engines-murrine missing → GTK2 apps will have NO theme (install it in the first script)."
 command -v xfce4-popup-whiskermenu >/dev/null 2>&1 \
   || echo "  [!] whiskermenu not installed → NO Start button (install xfce4-whiskermenu-plugin)."
+ls /usr/lib/*/xfce4/panel/plugins/libpulseaudio-plugin.so >/dev/null 2>&1 \
+  || echo "  [!] xfce4-pulseaudio-plugin not installed → no volume widget and volume keys may not work."
 pgrep -u "$U" xfce4-panel >/dev/null 2>&1 || echo "  [!] xfce4-panel isn't running — the panel didn't come up."
 pgrep -u "$U" xfdesktop  >/dev/null 2>&1 || echo "  [!] xfdesktop isn't running — there will be no desktop icons."
 echo "──────────────────────────────────────────────────────"

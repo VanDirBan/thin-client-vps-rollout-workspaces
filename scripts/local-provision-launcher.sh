@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 IFS=$'\n\t'
+export LC_ALL=C
 
 # Interactive thin-client rollout wrapper. Keep this file in the same directory as
 # local-provision.sh, xfce-win10.sh, and workmon-agent-*/.
@@ -18,8 +19,8 @@ WG_VPS_MAX="${WG_VPS_MAX:-200}"
 WG_GATEWAY="${WG_GATEWAY:-${WG_NET_PREFIX}.1}"
 
 STEP_LIST="hostname ssh_hostkeys collect_key users grub apt_sources upgrade \
-desktop audio wireguard watchdog nomachine x11vnc win10_script nm_shortcut \
-power workmon summary"
+desktop audio audioprio wireguard watchdog nomachine x11vnc node_exporter \
+win10_script nm_shortcut power workmon summary"
 
 log()  { printf '\033[1;32m[launcher]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[launcher] WARN:\033[0m %s\n' "$*" >&2; }
@@ -159,6 +160,24 @@ while true; do
 done
 
 printf '\n'
+echo "4) Tunnel number of the paired VPS (${WG_VPS_MIN}-${WG_VPS_MAX})."
+echo "   The NoMachine shortcut will open a fullscreen session to it automatically."
+echo "   Enter = skip (shortcut launches bare nxplayer; add the connection manually later)."
+nx_vps_host=""
+while true; do
+    read -r -p "   VPS number [Enter = skip]: " reply
+    [[ -z "$reply" ]] && break
+    if [[ "$reply" =~ ^[0-9]+$ ]] && ((reply >= WG_VPS_MIN && reply <= WG_VPS_MAX)); then
+        nx_vps_host="${WG_NET_PREFIX}.${reply}"
+        break
+    elif [[ "$reply" =~ ^[0-9]+$ ]] && ((reply >= WG_HOST_MIN && reply <= WG_HOST_MAX)); then
+        warn "${WG_NET_PREFIX}.${reply} is in the laptop range, not the VPS range (${WG_VPS_MIN}-${WG_VPS_MAX})"
+    else
+        warn "Enter a number ${WG_VPS_MIN}-${WG_VPS_MAX} or just Enter to skip"
+    fi
+done
+
+printf '\n'
 only=""
 read -r -p "Full run with all steps? [Y/n]: " reply
 if [[ "$reply" =~ ^[Nn] ]]; then
@@ -199,6 +218,7 @@ echo "  Hostname:      $new_hostname"
 echo "  WG address:    $wg_addr"
 echo "  WG gateway:    $WG_GATEWAY"
 echo "  VNC password:  $([ -n "$vnc_pass" ] && echo 'custom value supplied' || echo 'default/env value')"
+echo "  Paired VPS:    ${nx_vps_host:-none (bare nxplayer)}"
 echo "  Steps:         ${only:-all}"
 echo
 echo "  This may take a while (full-upgrade, firmware, NoMachine). Log: /var/log/local-provision.log"
@@ -209,12 +229,20 @@ env_args=( "NEW_HOSTNAME=${new_hostname}" "WG_CLIENT_ADDR=${wg_addr}" )
 for var in \
     ADMIN_USER SVC_USER SVC_USER_PASSWORD TARGET_USER ADMIN_GROUP COLLECT_PUBKEY WORKMON_AGENT_DIRNAME \
     WG_IFACE WG_SERVER_PUBKEY WG_ENDPOINT WG_ALLOWED WG_KEEPALIVE WG_GATEWAY WG_AUTOSTART WG_WATCHDOG_MAX_AGE \
+    AUDIO_TCP_PORT AUDIO_ALLOWED_IPS \
     NOMACHINE_BRANCH NOMACHINE_VERSION NOMACHINE_BUILD NOMACHINE_MD5 \
+    NX_CONNECT_ENABLE NX_VPS_HOST NX_VPS_PORT \
     X11VNC_ENABLE X11VNC_PASSWORD X11VNC_PORT X11VNC_DISPLAY X11VNC_PASS_FILE \
+    NODE_EXPORTER_ENABLE NODE_EXPORTER_PORT \
     WIN10_THEME_COMMIT WIN10_ICONS_COMMIT; do
     [[ -v "$var" ]] && env_args+=( "${var}=${!var}" )
 done
 [[ -n "$vnc_pass" ]] && env_args+=( "X11VNC_PASSWORD=${vnc_pass}" )
+if [[ -n "$nx_vps_host" ]]; then
+    env_args+=( "NX_CONNECT_ENABLE=yes" "NX_VPS_HOST=${nx_vps_host}" )
+else
+    env_args+=( "NX_CONNECT_ENABLE=no" )    # suppress empty-NX_VPS_HOST warning for an intentional skip
+fi
 [[ -n "$only" ]] && env_args+=( "ONLY=${only}" )
 
 printf '\n'
@@ -231,7 +259,16 @@ if ((rc == 0)); then
     echo "  2. On this laptop: sudo wg-quick up wg0"
     echo "  3. Verify: ping ${WG_GATEWAY} and curl ifconfig.me"
     echo "  4. Change default passwords where used: service user and x11vnc."
-    echo "  5. Log in as the service user, launch NoMachine, and apply the XFCE look script."
+    echo "  5. Log in as the service user and launch NoMachine from the desktop shortcut."
+    if [[ -n "$nx_vps_host" ]]; then
+        echo "     The shortcut opens a fullscreen session to ${nx_vps_host} automatically."
+        echo "     On first connect the client asks for credentials and trust, then saves them."
+    else
+        echo "     Add a VPS connection manually: host = the VPS WireGuard address, protocol NX."
+    fi
+    echo "  6. Apply the Windows-like XFCE look as the service user: bash ~/Desktop/xfce-win10.sh"
+    echo "  7. sudo reboot"
+    echo "  8. From the admin node: curl http://${wg_addr%%/*}:${NODE_EXPORTER_PORT:-9100}/metrics"
     echo "  Full runbook: docs/local-provision-admin-guide.md"
 else
     warn "Provisioner exited with code $rc"
