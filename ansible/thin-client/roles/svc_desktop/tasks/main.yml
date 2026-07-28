@@ -18,6 +18,10 @@
       via xfconf-query OR log the user out and rerun: --tags svc_desktop
   when: xfconfd_check.rc == 0
 
+# Every intermediate directory is listed EXPLICITLY: the file module creates
+# missing parents as root:root, and then the user's own XFCE session couldn't
+# create anything inside ~/.config/xfce4 or ~/.local (e.g. the panel config
+# or ~/.local/share) — the desktop would half-break on first login.
 - name: Directories in the user's home
   ansible.builtin.file:
     path: "{{ svc_home }}/{{ item }}"
@@ -27,13 +31,17 @@
     mode: '0755'
   loop:
     - .config
+    - .config/xfce4
+    - .config/xfce4/xfconf
     - .config/xfce4/xfconf/xfce-perchannel-xml
     - .config/autostart
+    - .local
     - .local/bin
+    - .local/share
     - Desktop
 
 # force: false — create only if the file is MISSING (an existing entry takes
-# priority, xdg won't rewrite it). Protection against a localized desktop folder name:
+# priority, xdg won't rewrite it). Protection against a localized Desktop name:
 # pin XDG_DESKTOP_DIR=~/Desktop BEFORE first login under a Russian locale.
 - name: user-dirs.dirs — pin Desktop (only if not present yet)
   ansible.builtin.copy:
@@ -94,13 +102,44 @@
     dest: /etc/lightdm/lightdm.conf.d/20-noblank.conf
     mode: '0644'
 
+# --- Ready-made NoMachine connection to the VPS (optional feature) ---
+# A generated .nxs => the shortcut opens a fullscreen session to the VPS right
+# away. "Session window state" is a documented .nxs key (normal/fullscreen/
+# multiscreen). Login/server trust is asked on the FIRST connection and stored
+# in this same .nxs — which is why the file lives in the home directory.
+- name: Directory for the .nxs connection file
+  ansible.builtin.file:
+    path: "{{ svc_home }}/.local/share/nomachine"
+    state: directory
+    owner: "{{ svc_user }}"
+    group: "{{ svc_user }}"
+    mode: '0755'
+  when: nx_connect_enable and (nx_vps_host | default('') | length > 0)
+
+- name: Ready-made VPS connection (VPS.nxs, fullscreen)
+  ansible.builtin.template:
+    src: VPS.nxs.j2
+    dest: "{{ svc_home }}/.local/share/nomachine/VPS.nxs"
+    owner: "{{ svc_user }}"
+    group: "{{ svc_user }}"
+    mode: '0600'
+  when: nx_connect_enable and (nx_vps_host | default('') | length > 0)
+
+- name: Warn — feature enabled but nx_vps_host is empty
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: nx_connect_enable=true but nx_vps_host is not set for
+      {{ inventory_hostname }} (host_vars) — the shortcut will launch bare
+      nxplayer without a ready-made connection.
+  when: nx_connect_enable and (nx_vps_host | default('') | length == 0)
+
 # --- NoMachine shortcut ---
 # We do NOT copy the system .desktop from /usr/share/applications — that's the
 # web-session MIME handler (NoDisplay=true), not a launcher. Our own clean
-# launcher points at nxplayer.
+# launcher points at nxplayer (with --session <.nxs> when the feature is on).
 - name: NoMachine shortcut on the desktop
-  ansible.builtin.copy:
-    src: nomachine.desktop
+  ansible.builtin.template:
+    src: nomachine.desktop.j2
     dest: "{{ svc_home }}/Desktop/nomachine.desktop"
     owner: "{{ svc_user }}"
     group: "{{ svc_user }}"
@@ -125,11 +164,12 @@
     mode: '0644'
 
 # xfce-win10.sh is applied LATER, by the user, in a live XFCE session.
-# The playbook only places the reviewed helper on the service user's Desktop.
-- name: Copy xfce-win10.sh to the desktop
+# This task fires once you drop the file into roles/svc_desktop/files/.
+- name: Copy xfce-win10.sh to the desktop (if the file was added to the role)
   ansible.builtin.copy:
     src: xfce-win10.sh
     dest: "{{ svc_home }}/Desktop/xfce-win10.sh"
     owner: "{{ svc_user }}"
     group: "{{ svc_user }}"
     mode: '0755'
+  when: lookup('ansible.builtin.fileglob', role_path ~ '/files/xfce-win10.sh') | length > 0

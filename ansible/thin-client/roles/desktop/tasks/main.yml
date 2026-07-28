@@ -15,6 +15,7 @@
   ansible.builtin.apt:
     name:
       - xfce4-whiskermenu-plugin   # "Start" button
+      - xfce4-pulseaudio-plugin    # volume control in the tray (audio tunnel)
       - gtk2-engines-murrine       # renders the GTK2 part of the B00merang theme
       - gvfs                       # Trash/removable media on the desktop
       - gvfs-daemons

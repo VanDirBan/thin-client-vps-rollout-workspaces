@@ -3,7 +3,11 @@ Version=1.0
 Type=Application
 Name=NoMachine
 Comment=Connect to a remote desktop
+{% if nx_connect_enable and (nx_vps_host | default('') | length > 0) %}
+Exec=/usr/NX/bin/nxplayer --session {{ svc_home }}/.local/share/nomachine/VPS.nxs
+{% else %}
 Exec=/usr/NX/bin/nxplayer
+{% endif %}
 Icon=nxplayer
 Terminal=false
 Categories=Network;RemoteAccess;

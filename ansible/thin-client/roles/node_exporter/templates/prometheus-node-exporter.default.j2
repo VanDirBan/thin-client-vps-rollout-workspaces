@@ -1,0 +1,2 @@
+# {{ ansible_managed }} (role node_exporter)
+ARGS="--web.listen-address={{ wg_client_addr | split('/') | first }}:{{ node_exporter_port }}"

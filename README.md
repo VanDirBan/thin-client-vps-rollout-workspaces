@@ -180,19 +180,20 @@ The script-based VPS rollout is currently ahead of this first Ansible slice for 
 
 ### `ansible/thin-client/`
 
-First Ansible migration slice for physical thin-client provisioning.
+Ansible migration slice for physical thin-client provisioning, currently aligned with the v2.4 local-provision flow.
 
-It currently maps the bash `scripts/local-provision.sh` flow into roles:
+It maps the bash `scripts/local-provision.sh` flow into roles:
 
 - `base` — hostname, hosts entry, SSH host keys, GRUB, APT sources, upgrade, base networking packages;
 - `users` — admin sudo membership, service user, collector SSH public key;
 - `desktop` — XFCE, LightDM, Windows-like theme attempt and fallbacks;
-- `audio` — PipeWire/audio package setup;
+- `audio` — PipeWire packages, per-user TCP audio tunnel config, and WirePlumber duplex profile;
 - `wireguard` — client keys, `wg0.conf`, NetworkManager exclusion, watchdog timer;
 - `nomachine` — NoMachine package install and `node.cfg` tuning;
 - `x11vnc` — fallback VNC service bound to the WireGuard interface;
-- `svc_desktop` — service-user Desktop/autostart/power/lock/NoMachine shortcut settings and `xfce-win10.sh` placement;
-- `workmon` — stub for a later native Ansible migration of the worker agent.
+- `node_exporter` — Prometheus metrics bound to the thin client's WireGuard address only;
+- `svc_desktop` — service-user Desktop/autostart/power/lock settings, optional ready-made NoMachine `.nxs` shortcut, and `xfce-win10.sh` placement;
+- `workmon` — bundled `workmon-agent-0.4.0` payload installed via its own rerun-safe `install.sh`.
 
 This is intentionally separate from the approved script rollout path. Use it for learning, review, dry-runs, and gradual migration rather than as the only operational source of truth.
 

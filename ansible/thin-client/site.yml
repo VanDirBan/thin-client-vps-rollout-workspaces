@@ -4,7 +4,7 @@
 # Selected roles only (like ONLY= in bash): --tags wireguard,x11vnc
 # Dry run without changes:       --check --diff
 ---
-- name: Provision thin clients (equivalent of local-provision.sh v2.2)
+- name: Provision thin clients (equivalent of local-provision.sh v2.4)
   hosts: thin_clients
   become: true
   gather_facts: false
@@ -27,7 +27,8 @@
           Replace the public placeholders before running: copy
           inventory/group_vars/thin_clients/vault.yml.example to ignored vault.yml,
           set real passwords there, and set collect_pubkey, wg_server_pubkey,
-          wg_endpoint, inventory hosts, and per-host wg_client_addr for your site.
+          wg_endpoint, inventory hosts, per-host wg_client_addr, and optional
+          nx_vps_host/audio ACL values for your site.
       tags: [always]
 
     # Equivalent of the bash pre-checks: validate inputs BEFORE changing anything.
@@ -47,12 +48,13 @@
     - { role: base,        tags: [base] }         # hostname, hosts, ssh keys, grub, apt, upgrade
     - { role: users,       tags: [users] }        # sudo for adams, service user smm, collector key
     - { role: desktop,     tags: [desktop] }      # XFCE, Win10 theme, lightdm
-    - { role: audio,       tags: [audio] }        # PipeWire + groups for smm
+    - { role: audio,       tags: [audio] }        # PipeWire + tunnel TCP input + duplex profile
     - { role: wireguard,   tags: [wireguard] }    # keys, wg0.conf, watchdog (tunnel NOT brought up)
     - { role: nomachine,   tags: [nomachine] }    # .deb + node.cfg
     - { role: x11vnc,      tags: [x11vnc] }       # backup VNC to the physical screen
-    - { role: svc_desktop, tags: [svc_desktop] }  # power/lock/shortcuts for smm
-    - { role: workmon,     tags: [workmon] }      # TODO: agent to be added later
+    - { role: node_exporter, tags: [node_exporter] }  # Prometheus metrics, wg0 only
+    - { role: svc_desktop, tags: [svc_desktop] }  # power/lock/shortcuts/.nxs for smm
+    - { role: workmon,     tags: [workmon] }      # workmon-agent via its bundled install.sh
 
   post_tasks:
     # Equivalent of step_summary: the key thing is the client public key for [Peer] on the VPS.
@@ -65,8 +67,17 @@
           - "    (on the VPS: AllowedIPs = {{ wg_client_addr | split('/') | first }}/32)"
           - "Next: 1) add peer on VPS  2) on the laptop: sudo wg-quick up {{ wg_iface }}"
           - "      3) verify: ping 10.8.0.1 and curl ifconfig.me (VPS IP)"
-          - "      4) audio tunnel per your .md  5) NoMachine -> host 10.8.0.1"
+          - "      4) audio tunnel comes up by itself with pipewire-pulse in the {{ svc_user }} session"
+          - "         (port {{ audio_tcp_port }}, ACL {{ audio_allowed_ips }}); check after login + WG:"
+          - "         pactl list short modules | grep native-protocol-tcp"
+          - "      5) NoMachine: {{ 'the desktop shortcut opens ' + nx_vps_host | default('') + ' fullscreen' if nx_connect_enable and (nx_vps_host | default('') | length > 0) else 'add the connection by hand (bare nxplayer)' }}"
           - "      6) as {{ svc_user }} in XFCE: bash ~/Desktop/xfce-win10.sh"
+          - "x11vnc (backup access to the PHYSICAL screen): {{ wg_client_addr | split('/') | first }}:{{ x11vnc_port }} — tunnel only; starts listening once {{ wg_iface }} is up"
+          - "node_exporter: {{ wg_client_addr | split('/') | first }}:{{ node_exporter_port }} — check from the admin node: curl http://{{ wg_client_addr | split('/') | first }}:{{ node_exporter_port }}/metrics"
+          - "If an nftables killswitch with drop on input is active, allow:"
+          - "  iifname \"{{ wg_iface }}\" tcp dport {{ audio_tcp_port }} accept   (audio)"
+          - "  iifname \"{{ wg_iface }}\" tcp dport {{ x11vnc_port }} accept   (VNC)"
+          - "  iifname \"{{ wg_iface }}\" tcp dport {{ node_exporter_port }} accept   (metrics)"
           - "A reboot is recommended (firmware/microcode, lightdm): sudo reboot"
       when: wg_client_public_key is defined
       tags: [always]

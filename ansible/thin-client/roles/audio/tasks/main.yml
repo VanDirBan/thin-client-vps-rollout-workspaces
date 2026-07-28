@@ -1,5 +1,6 @@
-# Role audio: PipeWire + pulse-shim + client utilities (for the .md procedure).
-# The tunnel modules themselves — done manually per your .md, AFTER WG is up.
+# Role audio: PipeWire + pulse-shim + client utilities + the tunnel's TCP input.
+# Combines bash steps: audio, audioprio (v2.4). The module lives in
+# pipewire-pulse config => survives reboots and service restarts by itself.
 ---
 - name: PipeWire + pipewire-pulse + utilities + pavucontrol
   ansible.builtin.apt:
@@ -17,3 +18,80 @@
     name: "{{ svc_user }}"
     groups: audio,video
     append: true
+
+# --- The tunnel's TCP input: config ONLY in the service user's home ---
+# A fragment in /etc would be read by EVERY user's pipewire-pulse, and the
+# admin instance would fight the service one for the port (bind: Address
+# already in use). Listen on 0.0.0.0 (the wg0 address may not exist yet when
+# the session starts) — access is cut by auth-ip-acl.
+# Parent dirs are created explicitly with the right owner: the file module
+# would create missing parents as root:root, and the user couldn't write
+# to their own ~/.config afterwards.
+- name: Directories for the pipewire-pulse per-user config
+  ansible.builtin.file:
+    path: "{{ svc_home }}/{{ item }}"
+    state: directory
+    owner: "{{ svc_user }}"
+    group: "{{ svc_user }}"
+    mode: '0755'
+  loop:
+    - .config
+    - .config/pipewire
+    - .config/pipewire/pipewire-pulse.conf.d
+
+- name: Audio tunnel — module-native-protocol-tcp in the service user's pipewire-pulse
+  ansible.builtin.template:
+    src: 50-wg-audio.conf.j2
+    dest: "{{ svc_home }}/.config/pipewire/pipewire-pulse.conf.d/50-wg-audio.conf"
+    owner: "{{ svc_user }}"
+    group: "{{ svc_user }}"
+    mode: '0644'
+
+# Legacy cleanup: the system-wide variant caused the two-instance port race.
+- name: Remove the legacy system-wide audio tunnel config
+  ansible.builtin.file:
+    path: /etc/pipewire/pipewire-pulse.conf.d/50-wg-audio.conf
+    state: absent
+
+# Best-effort: if the user's session is already live, pick the config up now.
+# On a fresh provision there's no session yet — the tunnel comes up on first login.
+- name: Restart pipewire-pulse in a live session (best-effort)
+  ansible.builtin.command: systemctl --user -M {{ svc_user }}@ restart pipewire-pulse
+  changed_when: false
+  failed_when: false
+
+# --- audioprio: the onboard card always in duplex (output + microphone) ---
+# Fixes the "output only" profile where the system has no sources and the mic
+# (including a 3.5mm headset) is dead. The conf.d rule sets the STARTING
+# profile; port selection (headset/built-in) is then done by jack-detection.
+- name: /etc/wireplumber/wireplumber.conf.d directory
+  ansible.builtin.file:
+    path: /etc/wireplumber/wireplumber.conf.d
+    state: directory
+    mode: '0755'
+
+- name: WirePlumber — duplex profile for the onboard audio card
+  ansible.builtin.copy:
+    src: 50-analog-duplex.conf
+    dest: /etc/wireplumber/wireplumber.conf.d/50-analog-duplex.conf
+    mode: '0644'
+
+# Session is live — switch to duplex right now: try the profile on every card,
+# HDMI silently refuses (no such profile), Realtek applies it.
+- name: Check for a live wireplumber session
+  ansible.builtin.command: pgrep -u {{ svc_user }} wireplumber
+  register: wireplumber_check
+  changed_when: false
+  failed_when: false
+
+- name: Apply the duplex profile in the live session (best-effort)
+  ansible.builtin.shell: |
+    for card in $(systemd-run --quiet --pipe --machine="{{ svc_user }}@" --user \
+                      pactl list short cards 2>/dev/null | awk '{print $2}'); do
+        systemd-run --quiet --pipe --machine="{{ svc_user }}@" --user \
+            pactl set-card-profile "$card" \
+            output:analog-stereo+input:analog-stereo 2>/dev/null || true
+    done
+  when: wireplumber_check.rc == 0
+  changed_when: false
+  failed_when: false

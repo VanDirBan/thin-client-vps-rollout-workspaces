@@ -1,0 +1,5 @@
+# {{ ansible_managed }} (role audio)
+pulse.cmd = [
+    { cmd = "load-module"
+      args = "module-native-protocol-tcp listen=0.0.0.0 port={{ audio_tcp_port }} auth-ip-acl={{ audio_allowed_ips }}" }
+]

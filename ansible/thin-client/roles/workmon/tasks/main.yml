@@ -1,8 +1,39 @@
-# Role workmon: install workmon-agent. A stub for now — the installer and
-# helper scripts will be added in the next migration step.
-# Plan: files/workmon-agent-<version>/ -> copy to the host -> command install.sh
-# (or, better, rewrite install.sh as native Ansible tasks).
+# Role workmon: install workmon-agent — equivalent of step_workmon.
+# The agent ships inside the role (files/workmon-agent-0.4.0/); its own
+# install.sh stays the single source of truth for HOW to install (packages,
+# directories, the systemd unit) — we don't duplicate its logic in tasks.
+# The installer is rerun-safe: `install` overwrites, apt is idempotent.
 ---
-- name: WorkMon agent — TODO
+- name: Agent version (single place to bump on upgrade)
+  ansible.builtin.set_fact:
+    workmon_agent_dir: workmon-agent-0.4.0
+
+- name: Copy the agent to the host
+  ansible.builtin.copy:
+    src: "{{ workmon_agent_dir }}/"
+    dest: "/usr/local/src/{{ workmon_agent_dir }}/"
+    mode: preserve
+  register: workmon_copy
+
+- name: Check whether the agent is already installed
+  ansible.builtin.stat:
+    path: /etc/systemd/system/workmon-capture.service
+  register: workmon_unit
+
+# Run the installer when the payload changed (new version/edits) or the agent
+# isn't installed yet. Installer failure = provisioning failure (die logic).
+- name: Run install.sh
+  ansible.builtin.command:
+    cmd: bash install.sh
+    chdir: "/usr/local/src/{{ workmon_agent_dir }}"
+  when: workmon_copy.changed or not workmon_unit.stat.exists
+  register: workmon_install
+  changed_when: workmon_install.rc == 0
+
+- name: Reminder about the collector key
   ansible.builtin.debug:
-    msg: "The workmon role is empty for now: workmon-agent installation will move here."
+    msg: >-
+      workmon-capture won't start until the collector's public key is in place.
+      From the admin node:
+      scp -i /etc/workmon-collect/id_collect public.key root@<wg-addr>:/etc/workmon/
+      then on the client: systemctl start workmon-capture.service

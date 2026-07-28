@@ -3,3 +3,7 @@
 # from the bash script. One file per machine under host_vars/.
 ---
 wg_client_addr: 10.8.0.5/24
+
+# WireGuard address of the PAIRED VPS for the ready-made NoMachine
+# session (.nxs). Leave unset => the shortcut launches bare nxplayer.
+# nx_vps_host: 10.8.0.101

@@ -1,0 +1,9 @@
+# The restart may fail while the tunnel is down — that's fine, the drop-in
+# makes systemd retry every 5s until wg0 has an address ("warn and carry on").
+---
+- name: Restart node_exporter
+  ansible.builtin.systemd:
+    name: prometheus-node-exporter
+    state: restarted
+    daemon_reload: true
+  failed_when: false

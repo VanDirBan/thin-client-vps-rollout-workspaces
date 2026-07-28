@@ -24,6 +24,29 @@ wg_keepalive: 25
 wg_autostart: true              # enable units on boot (we do NOT bring the tunnel up in this run)
 wg_watchdog_max_age: 180        # seconds without a handshake => watchdog recreates the tunnel
 
+# --- Audio tunnel (PipeWire) ---
+# The laptop is the TCP sound server (module-native-protocol-tcp): the VPS
+# plays into its default sink and records from its default source. The module
+# lives in pipewire-pulse config => survives reboots/restarts, no watchdog needed.
+audio_tcp_port: 4713
+audio_allowed_ips: '127.0.0.1;10.8.0.0/24'     # auth-ip-acl: localhost + WireGuard network
+
+# --- Ready-made NoMachine connection to the VPS (optional feature) ---
+# true + nx_vps_host set (host_vars) => the desktop shortcut opens a fullscreen
+# session to the VPS right away (generated .nxs). Otherwise — bare nxplayer,
+# the connection is added by hand.
+nx_connect_enable: true
+nx_vps_port: 4000
+# nx_vps_host is PER-MACHINE (the WireGuard address of the paired VPS):
+# set it in host_vars/<name>.yml
+
+# --- node_exporter: hardware/OS metrics for Prometheus on the admin node ---
+# Binds ONLY to this machine's wg address (from wg_client_addr) — the port
+# doesn't exist on the outside. Second layer: allow in the killswitch:
+#   iifname "wg0" tcp dport 9100 accept
+node_exporter_enable: true
+node_exporter_port: 9100
+
 # --- NoMachine (keep the same version as on the VPS) ---
 nomachine_branch: '9.7'
 nomachine_version: '9.7.3'
