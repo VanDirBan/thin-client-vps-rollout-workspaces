@@ -23,6 +23,7 @@ wg_allowed: '0.0.0.0/0, ::/0'
 wg_keepalive: 25
 wg_autostart: true              # enable units on boot (we do NOT bring the tunnel up in this run)
 wg_watchdog_max_age: 180        # seconds without a handshake => watchdog recreates the tunnel
+wg_server_addr: 10.8.0.1
 
 # --- Audio tunnel (PipeWire) ---
 # The laptop is the TCP sound server (module-native-protocol-tcp): the VPS

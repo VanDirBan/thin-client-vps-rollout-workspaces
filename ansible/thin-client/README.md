@@ -1,6 +1,6 @@
 # thin-client-ansible
 
-A migration of `local-provision.sh` v2.4 to Ansible. Push model: the playbook runs from the admin laptop and configures thin clients over SSH. A single run can provision the whole fleet in parallel.
+A migration of `local-provision.sh` v2.4.1 to Ansible. Push model: the playbook runs from the admin laptop and configures thin clients over SSH. A single run can provision the whole fleet in parallel.
 
 ## How this maps to the bash script
 
@@ -96,9 +96,9 @@ roles/<name>/
 
 All behavior is preserved: the tunnel is not brought up during the run, passwords are not overwritten on reruns, WG keys are generated on the machine itself and reused, x11vnc listens only on wg0, units are enabled on boot without starting in the current session.
 
-New in v2.4 (ported from the script): the audio tunnel is fully automated — role `audio` drops `module-native-protocol-tcp` into the service user's `pipewire-pulse` config (`audio_tcp_port` / `audio_allowed_ips` in `vars.yml`) and a WirePlumber rule that forces the onboard card into duplex; role `node_exporter` binds Prometheus metrics to the wg address only (`node_exporter_*` vars); the desktop shortcut can open a ready-made fullscreen session to the paired VPS — set `nx_vps_host` in `host_vars/<name>.yml` (feature toggle `nx_connect_enable`).
+New in v2.4/v2.4.1 (ported from the script): the audio tunnel is fully automated — role `audio` drops `module-native-protocol-tcp` into the service user's `pipewire-pulse` config (`audio_tcp_port` / `audio_allowed_ips` in `vars.yml`) and a WirePlumber rule that forces the onboard card into duplex; role `node_exporter` binds Prometheus metrics to the wg address only (`node_exporter_*` vars); the desktop shortcut can open a ready-made fullscreen session to the paired VPS — set `nx_vps_host` in `host_vars/<name>.yml` (feature toggle `nx_connect_enable`).
 
-Minor differences: apt sources are now laid down as a whole file (declaratively) instead of an awk edit — check `roles/base/templates/debian.sources.j2` if you use non-standard mirrors. Backups of edits are made by Ansible itself (`backup: true`, i.e. timestamped copies next to the file) instead of a single `.orig`. The NoMachine shortcut icon is set as `Icon=nxplayer` instead of a `find` lookup — if the icon doesn't resolve, put an explicit path in `roles/svc_desktop/templates/nomachine.desktop.j2`. There's no more `/var/log/local-provision.log`: the full report is printed by Ansible itself on the admin laptop (enable `log_path` in `ansible.cfg` if you want a file).
+Minor differences: the base role now leaves APT source configuration to the target OS or your site baseline and handles upgrade/package installation only. Backups of edits are made by Ansible itself (`backup: true`, i.e. timestamped copies next to the file) instead of a single `.orig`. The NoMachine shortcut icon is set as `Icon=nxplayer` instead of a `find` lookup — if the icon doesn't resolve, put an explicit path in `roles/svc_desktop/templates/nomachine.desktop.j2`. There's no more `/var/log/local-provision.log`: the full report is printed by Ansible itself on the admin laptop (enable `log_path` in `ansible.cfg` if you want a file).
 
 `xfce-win10.sh` ships in `roles/svc_desktop/files/` and is copied to the user's desktop. The `workmon` role bundles `workmon-agent-0.4.0` and runs its own `install.sh` on the host (rerun-safe); on an agent upgrade, replace the directory under `roles/workmon/files/` and bump the version in `roles/workmon/tasks/main.yml`.
 

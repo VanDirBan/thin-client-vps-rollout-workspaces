@@ -9,6 +9,7 @@
   register: xfconfd_check
   changed_when: false
   failed_when: false
+  check_mode: false
 
 - name: Warn about a live session
   ansible.builtin.debug:
@@ -41,7 +42,7 @@
     - Desktop
 
 # force: false — create only if the file is MISSING (an existing entry takes
-# priority, xdg won't rewrite it). Protection against a localized Desktop name:
+# priority, xdg won't rewrite it). Protection against a localized Desktop directory name:
 # pin XDG_DESKTOP_DIR=~/Desktop BEFORE first login under a Russian locale.
 - name: user-dirs.dirs — pin Desktop (only if not present yet)
   ansible.builtin.copy:
@@ -59,7 +60,7 @@
     dest: "{{ svc_home }}/.config/xfce4/xfconf/xfce-perchannel-xml/{{ item }}"
     owner: "{{ svc_user }}"
     group: "{{ svc_user }}"
-    mode: '0644'
+    mode: '0664'
   loop:
     - xfce4-power-manager.xml
     - xfce4-screensaver.xml
@@ -74,7 +75,7 @@
     group: "{{ svc_user }}"
     mode: '0644'
 
-- name: Safety net #2 — noblank.sh (xset on every login)
+- name: "Safety net #2 — noblank.sh (xset on every login)"
   ansible.builtin.copy:
     src: noblank.sh
     dest: "{{ svc_home }}/.local/bin/noblank.sh"
@@ -96,7 +97,7 @@
     state: directory
     mode: '0755'
 
-- name: Safety net #1 — lightdm X -s 0 -dpms (greeter never blanks either)
+- name: "Safety net #1 — lightdm X -s 0 -dpms (greeter never blanks either)"
   ansible.builtin.copy:
     src: 20-noblank.conf
     dest: /etc/lightdm/lightdm.conf.d/20-noblank.conf
@@ -123,6 +124,7 @@
     owner: "{{ svc_user }}"
     group: "{{ svc_user }}"
     mode: '0600'
+    force: false
   when: nx_connect_enable and (nx_vps_host | default('') | length > 0)
 
 - name: Warn — feature enabled but nx_vps_host is empty

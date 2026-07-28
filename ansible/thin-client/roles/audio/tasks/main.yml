@@ -83,6 +83,7 @@
   register: wireplumber_check
   changed_when: false
   failed_when: false
+  check_mode: false
 
 - name: Apply the duplex profile in the live session (best-effort)
   ansible.builtin.shell: |

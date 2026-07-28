@@ -1,5 +1,5 @@
-# Role base: hostname, /etc/hosts, SSH host keys, GRUB, apt sources, upgrade.
-# Combines bash steps: hostname, ssh_hostkeys, grub, apt_sources, upgrade.
+# Role base: hostname, /etc/hosts, SSH host keys, GRUB, upgrade, base packages.
+# Combines bash steps: hostname, ssh_hostkeys, grub, upgrade.
 ---
 - name: Set hostname (= inventory hostname)
   ansible.builtin.hostname:
@@ -36,17 +36,6 @@
     - { key: GRUB_TIMEOUT_STYLE, value: 'hidden' }
     - { key: GRUB_RECORDFAIL_TIMEOUT, value: '0' }
   notify: Update grub
-
-# --- apt sources: declaratively, as a whole file ---
-# Difference from the bash version: there awk appended components to the
-# existing file; here we lay down the DESIRED state in full. This is the main
-# mindset shift in Ansible: describe "how it should be", not "what to change".
-- name: apt sources deb822 — main contrib non-free non-free-firmware
-  ansible.builtin.template:
-    src: debian.sources.j2
-    dest: /etc/apt/sources.list.d/debian.sources
-    mode: '0644'
-    backup: true
 
 - name: Upgrade the system (full-upgrade)
   ansible.builtin.apt:

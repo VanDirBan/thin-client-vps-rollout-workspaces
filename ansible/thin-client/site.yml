@@ -4,7 +4,7 @@
 # Selected roles only (like ONLY= in bash): --tags wireguard,x11vnc
 # Dry run without changes:       --check --diff
 ---
-- name: Provision thin clients (equivalent of local-provision.sh v2.4)
+- name: Provision thin clients (equivalent of local-provision.sh v2.4.1)
   hosts: thin_clients
   become: true
   gather_facts: false
@@ -66,7 +66,7 @@
           - "    {{ wg_client_public_key }}"
           - "    (on the VPS: AllowedIPs = {{ wg_client_addr | split('/') | first }}/32)"
           - "Next: 1) add peer on VPS  2) on the laptop: sudo wg-quick up {{ wg_iface }}"
-          - "      3) verify: ping 10.8.0.1 and curl ifconfig.me (VPS IP)"
+          - "      3) verify: ping {{ wg_server_addr }} and curl ifconfig.me (VPS IP)"
           - "      4) audio tunnel comes up by itself with pipewire-pulse in the {{ svc_user }} session"
           - "         (port {{ audio_tcp_port }}, ACL {{ audio_allowed_ips }}); check after login + WG:"
           - "         pactl list short modules | grep native-protocol-tcp"

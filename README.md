@@ -182,11 +182,11 @@ This Ansible path still keeps the same major operational gap as the script path:
 
 ### `ansible/thin-client/`
 
-Ansible migration slice for physical thin-client provisioning, currently aligned with the v2.4 local-provision flow.
+Ansible migration slice for physical thin-client provisioning, currently aligned with the v2.4.1 release local-provision flow.
 
 It maps the bash `scripts/local-provision.sh` flow into roles:
 
-- `base` — hostname, hosts entry, SSH host keys, GRUB, APT sources, upgrade, base networking packages;
+- `base` — hostname, hosts entry, SSH host keys, GRUB, upgrade, base networking packages;
 - `users` — admin sudo membership, service user, collector SSH public key;
 - `desktop` — XFCE, LightDM, Windows-like theme attempt and fallbacks;
 - `audio` — PipeWire packages, per-user TCP audio tunnel config, and WirePlumber duplex profile;
