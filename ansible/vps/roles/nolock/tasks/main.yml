@@ -1,0 +1,73 @@
+---
+# Step: nolock — the work-user session never locks and the screen never
+# blanks. Lockers are purged as packages (pointless on a remote desktop,
+# they only get in the way); blanking is suppressed with an autostart
+# .desktop: it survives xfconfd and does not depend on whether the session
+# is alive at provisioning time.
+
+- name: Purge screensavers/lockers (xflock4 becomes a no-op without them)
+  ansible.builtin.apt:
+    name:
+      - xfce4-screensaver
+      - light-locker
+      - xscreensaver
+    state: absent
+    purge: true
+    autoremove: true
+  ignore_errors: true
+
+- name: Ensure the work user's autostart directory exists
+  ansible.builtin.file:
+    path: "/home/{{ work_user }}/.config/autostart"
+    state: directory
+    owner: "{{ work_user }}"
+    group: "{{ work_user }}"
+    mode: "0755"
+
+- name: Autostart entry — disable the X screensaver and DPMS on every login
+  ansible.builtin.copy:
+    src: no-blank.desktop
+    dest: "/home/{{ work_user }}/.config/autostart/no-blank.desktop"
+    owner: "{{ work_user }}"
+    group: "{{ work_user }}"
+    mode: "0644"
+
+- name: Get the work user's uid (for the session DBus path)
+  ansible.builtin.command: "id -u {{ work_user }}"
+  register: nolock_uid
+  changed_when: false
+  failed_when: false
+
+- name: Check whether the work-user session is alive
+  ansible.builtin.command: "pgrep -u {{ work_user }} xfce4-session"
+  register: nolock_session
+  changed_when: false
+  failed_when: false
+
+- name: Disable DPMS/blanking in the live session right away (best effort)
+  # Via the session's DBus; otherwise the autostart entry applies it on the
+  # next login anyway.
+  ansible.builtin.command:
+    argv:
+      - xfconf-query
+      - -c
+      - xfce4-power-manager
+      - -p
+      - "{{ item.prop }}"
+      - -n
+      - -t
+      - "{{ item.type }}"
+      - -s
+      - "{{ item.value }}"
+  environment:
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ nolock_uid.stdout | trim }}/bus"
+  loop:
+    - { prop: /xfce4-power-manager/dpms-enabled, type: bool, value: "false" }
+    - { prop: /xfce4-power-manager/blank-on-ac, type: int, value: "0" }
+  become: true
+  become_user: "{{ work_user }}"
+  changed_when: false
+  failed_when: false
+  when:
+    - nolock_session.rc == 0
+    - nolock_uid.stdout | default('') | trim | length > 0

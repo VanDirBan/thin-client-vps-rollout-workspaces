@@ -1,6 +1,6 @@
 ---
 # Main configuration — the only place you should need to edit.
-# Mirror of the CONFIG block from vps-provision.sh v2.0.
+# Mirror of the CONFIG block from vps-provision.sh v2.3.
 
 admin_user: adams
 work_user: smm
@@ -53,3 +53,23 @@ win10_icons_commit: "9f199c6b7c6050f36d0d15aaa6e9f4847e8b9066"   # B00merang-Art
 # --- Multilogin X -------------------------------------------------------------
 # The .deb ships with the project: put it into roles/mlx/files/
 mlx_deb_name: "desktop-multiloginx-ubuntu-24.04-amd64.deb"
+
+# --- Audio tunnel: the VPS plays sound on the thin client and records from
+# its microphone. The laptop is a PipeWire TCP server
+# (module-native-protocol-tcp, set up by local-provision). Here — a keeper
+# unit in the WORK_USER session: it holds tunnel-sink/source and re-creates
+# them on a break (laptop reboot, WG drop and the like).
+#
+# audio_laptop_ip is PER-HOST (each VPS pairs with one laptop,
+# 10.77.77.6-99) — set it in inventory/hosts.yml next to wg_address.
+audio_tunnel_enable: true
+audio_laptop_ip: ""          # per-host override in inventory/hosts.yml
+audio_tcp_port: 4713
+
+# --- node_exporter: metrics for Prometheus on the admin node ------------------
+# Listens ONLY on this VPS's wg address (derived from wg_address). Critical:
+# the VPS has a public IP and no firewall yet — on 0.0.0.0 the metrics would
+# be visible to the whole internet. Until the tunnel is up the bind fails —
+# systemd retries every 5s (drop-in in the role).
+node_exporter_enable: true
+node_exporter_port: 9100

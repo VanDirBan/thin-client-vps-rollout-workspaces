@@ -1,0 +1,5 @@
+# managed by vps-provision (Ansible)
+AT_ENABLE="{{ 'yes' if audio_enabled else 'no' }}"
+AT_USER="{{ work_user }}"
+AT_HOST="{{ audio_laptop_ip }}"
+AT_PORT="{{ audio_tcp_port }}"

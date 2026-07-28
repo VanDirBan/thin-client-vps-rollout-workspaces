@@ -1,0 +1,118 @@
+---
+# Step: audio — keeper of the audio tunnel to the thin client.
+# Same architecture as wg-watchdog: a static runner (verbatim file) + config
+# in /etc/default + a systemd unit. The unit is USER-level (sound lives in
+# the WORK_USER session), enabled globally; the runner gates itself on the
+# user name. tunnel-sink is loaded WITHOUT sink= — it plays into the
+# laptop's default sink, so switching HyperX/speakers on the laptop is
+# transparent to the VPS.
+#
+# audio_laptop_ip is per-host (each VPS pairs with one laptop) — set it in
+# inventory/hosts.yml.
+
+- name: Decide whether the tunnel is effectively enabled
+  ansible.builtin.set_fact:
+    audio_enabled: "{{ audio_tunnel_enable | bool and (audio_laptop_ip | default('') | length > 0) }}"
+
+- name: Warn — enabled but no laptop IP set
+  ansible.builtin.debug:
+    msg: "WARNING: audio_tunnel_enable=true but audio_laptop_ip is empty — disabling the tunnel for this host"
+  when:
+    - audio_tunnel_enable | bool
+    - (audio_laptop_ip | default('') | length) == 0
+
+- name: Install pactl for the runner (best effort)
+  ansible.builtin.apt:
+    name: pulseaudio-utils
+    state: present
+  ignore_errors: true
+
+- name: Render /etc/default/audio-tunnel
+  ansible.builtin.template:
+    src: audio-tunnel.default.j2
+    dest: /etc/default/audio-tunnel
+    mode: "0644"
+
+- name: Install the static runner
+  ansible.builtin.copy:
+    src: audio-tunnel.sh
+    dest: /usr/local/bin/audio-tunnel.sh
+    mode: "0755"
+
+- name: Install the systemd user unit
+  ansible.builtin.copy:
+    src: audio-tunnel.service
+    dest: /etc/systemd/user/audio-tunnel.service
+    mode: "0644"
+
+- name: Install notify-send for user feedback (best effort)
+  ansible.builtin.apt:
+    name: libnotify-bin
+    state: present
+  ignore_errors: true
+
+- name: Enable and start the tunnel
+  when: audio_enabled
+  block:
+    - name: Install the manual restart helper
+      ansible.builtin.copy:
+        src: audio-tunnel-restart.sh
+        dest: /usr/local/bin/audio-tunnel-restart.sh
+        mode: "0755"
+
+    - name: Ensure the work user's Desktop exists
+      ansible.builtin.file:
+        path: "/home/{{ work_user }}/Desktop"
+        state: directory
+        owner: "{{ work_user }}"
+        group: "{{ work_user }}"
+        mode: "0755"
+
+    - name: Put the "Restart sound" button on the Desktop
+      ansible.builtin.copy:
+        src: audio-restart.desktop
+        dest: "/home/{{ work_user }}/Desktop/audio-restart.desktop"
+        owner: "{{ work_user }}"
+        group: "{{ work_user }}"
+        mode: "0755"
+
+    - name: Enable audio-tunnel.service globally (for every user session)
+      ansible.builtin.systemd_service:
+        name: audio-tunnel.service
+        scope: global
+        enabled: true
+
+    - name: Start the unit in the live work-user session (best effort)
+      # If the session is not up yet, the unit starts on the next login.
+      ansible.builtin.command: "systemctl --user -M {{ work_user }}@ start audio-tunnel.service"
+      register: audio_start
+      changed_when: audio_start.rc == 0
+      failed_when: false
+
+    - name: Note — session not active
+      ansible.builtin.debug:
+        msg: "Session of {{ work_user }} is not active — the unit will start on the next login"
+      when: audio_start.rc != 0
+
+- name: Disable and clean up the tunnel
+  when: not audio_enabled
+  block:
+    - name: Disable audio-tunnel.service globally
+      ansible.builtin.systemd_service:
+        name: audio-tunnel.service
+        scope: global
+        enabled: false
+      failed_when: false
+
+    - name: Stop the unit in the live work-user session (best effort)
+      ansible.builtin.command: "systemctl --user -M {{ work_user }}@ stop audio-tunnel.service"
+      changed_when: false
+      failed_when: false
+
+    - name: Remove the Desktop button and the restart helper
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/home/{{ work_user }}/Desktop/audio-restart.desktop"
+        - /usr/local/bin/audio-tunnel-restart.sh

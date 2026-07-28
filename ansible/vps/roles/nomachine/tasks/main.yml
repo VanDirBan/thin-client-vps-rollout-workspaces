@@ -1,5 +1,6 @@
 ---
 # Step: nomachine — install + node.cfg (WITHOUT a restart).
+# node.cfg gets DefaultDesktopCommand and AudioInterface=disabled.
 # The XFCE session goes into node.cfg BEFORE any nxserver restart (grey
 # screen otherwise). The single nxserver restart of the whole run is done
 # by the display role, when Xorg/LightDM are already in place and NoMachine
@@ -64,9 +65,25 @@
     path: /usr/NX/etc/node.cfg
   register: nx_cfg
 
-- name: Set the XFCE session as the NoMachine desktop command
+- name: Keep a one-time backup of the pristine node.cfg
+  # Analogue of the shell's ensure_backup: a single node.cfg.orig instead of
+  # timestamped copies on every run.
+  ansible.builtin.command: cp -a /usr/NX/etc/node.cfg /usr/NX/etc/node.cfg.orig
+  args:
+    creates: /usr/NX/etc/node.cfg.orig
+  when: nx_cfg.stat.exists
+
+- name: Configure node.cfg (XFCE session, NX audio channel disabled)
+  # NoMachine ships defaults COMMENTED OUT (#Key value) — the regexp matches
+  # both the commented and the live form, same as set_nodecfg in the shell.
+  # AudioInterface disabled mutes both playback and mic in the NX channel
+  # regardless of client checkboxes — all sound goes through the separate
+  # PipeWire tunnel (audio role).
   ansible.builtin.lineinfile:
     path: /usr/NX/etc/node.cfg
-    regexp: '^DefaultDesktopCommand'
-    line: 'DefaultDesktopCommand "/usr/bin/startxfce4"'
+    regexp: '^#?{{ item.key }}([[:space:]]|$)'
+    line: '{{ item.key }} {{ item.value }}'
+  loop:
+    - { key: DefaultDesktopCommand, value: '"/usr/bin/startxfce4"' }
+    - { key: AudioInterface, value: disabled }
   when: nx_cfg.stat.exists

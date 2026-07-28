@@ -25,7 +25,7 @@
         Users:        {{ admin_user }} (sudo), {{ work_user }} (unprivileged)
         Desktop:      XFCE, Windows-10 theme (B00merang {{ win10_theme_commit[:7] }}), Arc/Papirus fallback
         Locales:      {{ locales | join(' ') }} (LANG={{ locales[0] }})
-        Software:     Firefox, Telegram, Multilogin X, NoMachine, WireGuard
+        Software:     Firefox, Telegram, Teams, Multilogin X, NoMachine, WireGuard
 
         WireGuard public key of this VPS (add as a peer on the server):
           {{ sum_pub.stdout | default('') | trim | default('- not found (wireguard step not run?)', true) }}
@@ -34,6 +34,10 @@
       {% else %}
         Tunnel:       NOT configured — fill wg_server_pubkey / wg_server_endpoint
                       and re-run:  ansible-playbook site.yml --tags wireguard
+      {% endif %}
+      {% if node_exporter_enable | bool %}
+        Monitoring:   node_exporter on {{ wg_address.split('/') | first }}:{{ node_exporter_port }} (wg0 only, the public IP is not listened on).
+                      Add this VPS to /etc/prometheus/targets/fleet.json on the admin node (type: vps).
       {% endif %}
 
 - name: IMPORTANT — what this playbook does NOT do (planned as the next step)

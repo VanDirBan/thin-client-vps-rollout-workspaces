@@ -74,7 +74,17 @@
       no_log: true   # the rendered file contains the private key
       notify: Restart wg-quick@wg0
 
-    - name: Enable wg-quick@wg0
+    - name: Enable wg-quick@wg0 and make sure it is up
+      # `started` (not `restarted`): a re-run with an unchanged config still
+      # brings a down tunnel up; a config change restarts it via the handler.
       ansible.builtin.systemd_service:
         name: wg-quick@wg0
         enabled: true
+        state: started
+      register: wg_up
+      failed_when: false
+
+    - name: Warn — wg0 did not come up
+      ansible.builtin.debug:
+        msg: "WARNING: wg-quick@wg0 failed to start — check: journalctl -u wg-quick@wg0"
+      when: wg_up is failed

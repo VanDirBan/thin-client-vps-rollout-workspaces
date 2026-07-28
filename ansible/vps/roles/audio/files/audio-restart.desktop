@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Restart sound
+Comment=Restart the audio tunnel if sound or microphone disappeared
+Exec=/usr/local/bin/audio-tunnel-restart.sh
+Icon=audio-card
+Terminal=false

@@ -1,6 +1,7 @@
 ---
-# vps-provision — Ansible port of vps-provision.sh v2.0
-#   XFCE + NoMachine + Firefox + Multilogin X + Telegram + WireGuard (client)
+# vps-provision — Ansible port of vps-provision.sh v2.3
+#   XFCE + NoMachine + Firefox + MLX + Telegram + Teams + WireGuard (client)
+#   + audio tunnel to the thin client + node_exporter (wg-only) + no-lock
 #   Users: adams (admin), smm (work)
 #
 # Full run:
@@ -15,7 +16,7 @@
 #
 # The playbook is idempotent: a re-run does not break what is already done.
 
-- name: Provision a work VPS (XFCE + NoMachine + Firefox + MLX + Telegram + WG client)
+- name: Provision a work VPS (XFCE + NoMachine + Firefox + MLX + Telegram + Teams + WG client)
   hosts: vps
   become: true
   gather_facts: false
@@ -30,6 +31,7 @@
           - vault_work_pass | default('') | length > 0
           - vault_work_pass | default('') != 'CHANGE_ME_STRONG_WORK_PASSWORD'
           - ansible_host | default('') != '203.0.113.10'
+          - wg_address | default('') is match('^\d+\.\d+\.\d+\.\d+/\d+$')
           - >-
             ((wg_server_pubkey | default('') | length) == 0 and
              (wg_server_endpoint | default('') | length) == 0) or
@@ -40,6 +42,7 @@
           group_vars/vps/vault.yml.example to ignored vault.yml, set real
           passwords there, update inventory/hosts.yml with a real VPS address,
           and either leave both WireGuard server values empty or set both.
+          Set audio_laptop_ip per host only when the paired thin client is ready.
       tags: [always]
 
     - name: Gather facts after local safety checks
@@ -55,10 +58,14 @@
     - { role: desktop,   tags: desktop }
     - { role: users,     tags: users }
     - { role: firefox,   tags: firefox }
-    - { role: telegram,  tags: telegram }
-    - { role: wireguard, tags: wireguard }
-    - { role: nomachine, tags: nomachine }
-    - { role: mlx,       tags: mlx }
-    - { role: display,   tags: display }
-    - { role: shortcuts, tags: shortcuts }
-    - { role: summary,   tags: summary }
+    - { role: telegram,      tags: telegram }
+    - { role: teams,         tags: teams }
+    - { role: wireguard,     tags: wireguard }
+    - { role: nomachine,     tags: nomachine }
+    - { role: audio,         tags: audio }
+    - { role: mlx,           tags: mlx }
+    - { role: node_exporter, tags: node_exporter }
+    - { role: display,       tags: display }
+    - { role: nolock,        tags: nolock }
+    - { role: shortcuts,     tags: shortcuts }
+    - { role: summary,       tags: summary }

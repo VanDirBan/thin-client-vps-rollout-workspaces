@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=No screen blanking
+Comment=managed by vps-provision (Ansible)
+Exec=sh -c "xset s off s noblank -dpms"
+OnlyShowIn=XFCE;
+X-GNOME-Autostart-enabled=true

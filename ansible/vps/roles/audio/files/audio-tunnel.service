@@ -1,0 +1,12 @@
+[Unit]
+Description=Audio tunnel keeper (tunnel-sink/source -> thin client)
+After=pipewire-pulse.service
+Wants=pipewire-pulse.service
+
+[Service]
+ExecStart=/usr/local/bin/audio-tunnel.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

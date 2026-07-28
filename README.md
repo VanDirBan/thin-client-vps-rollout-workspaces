@@ -24,7 +24,7 @@ Why they are here:
 
 How to read them:
 
-- `ansible/vps/site.yml` provisions the working VPS: base system, XFCE/LightDM, users, Firefox, Telegram, WireGuard client, NoMachine, Multilogin X, desktop shortcuts, and summary.
+- `ansible/vps/site.yml` provisions the working VPS: base system, XFCE/LightDM, users, Firefox, Telegram, Teams, WireGuard client, NoMachine, Multilogin X, audio tunnel, node_exporter, no-lock/no-blank handling, desktop shortcuts, and summary.
 - `ansible/thin-client/site.yml` provisions the physical thin client and calls roles in the same rough order as `scripts/local-provision.sh`.
 - Each Ansible directory has its own `README.md`, `ansible.cfg`, inventory, variables, roles, and `vault.yml.example` template.
 - Real `vault.yml` files and local binary installers stay ignored. Copy the example, replace placeholders, and encrypt with Ansible Vault before routine use.
@@ -157,9 +157,9 @@ ansible-playbook site.yml -K --ask-vault-pass --check --diff --limit tc-05
 
 ### `ansible/vps/`
 
-First Ansible migration slice for VPS desktop provisioning.
+Ansible migration slice for VPS desktop provisioning, currently aligned with the v2.3 `scripts/vps-provision.sh` flow.
 
-It maps the bash `scripts/vps-provision.sh` flow into roles:
+It maps the bash flow into roles:
 
 - `preflight` — safe reruns, stuck NoMachine installer cleanup, half-configured package recovery;
 - `base` — full upgrade, core utilities, locales, timezone, QEMU guest agent best effort;
@@ -167,16 +167,18 @@ It maps the bash `scripts/vps-provision.sh` flow into roles:
 - `users` — admin sudo user and unprivileged work user, with passwords set only on creation;
 - `firefox` — Mozilla APT repo install with distro/ESR fallback;
 - `telegram` — Telegram Desktop install;
+- `teams` — teams-for-linux desktop client and launcher;
 - `wireguard` — VPS client keypair and optional `wg0.conf`/service once server peer values are set;
-- `nomachine` — NoMachine install and `node.cfg` session tuning;
+- `nomachine` — NoMachine install and `node.cfg` session tuning with NX audio disabled;
+- `audio` — work-user PipeWire tunnel keeper to the paired thin client;
 - `mlx` — local Multilogin X `.deb` install, with the binary intentionally ignored by git;
+- `node_exporter` — Prometheus metrics bound to the VPS WireGuard address only;
 - `display` — Xorg dummy display, LightDM/XFCE autologin, keyboard layout autostart, final NoMachine restart;
+- `nolock` — remove lockers and suppress screen blanking/DPMS for the work session;
 - `shortcuts` — work-user desktop launchers;
 - `summary` — final operator report and remaining firewall warning.
 
 This Ansible path still keeps the same major operational gap as the script path: firewall policy is not configured yet, so public NoMachine exposure must be closed manually until the next hardening step is added.
-
-The script-based VPS rollout is currently ahead of this first Ansible slice for the v2.3 additions: Teams, the paired-laptop audio tunnel, WireGuard-only node_exporter, and no-lock/no-blank handling are implemented in `scripts/vps-provision.sh` first.
 
 ### `ansible/thin-client/`
 

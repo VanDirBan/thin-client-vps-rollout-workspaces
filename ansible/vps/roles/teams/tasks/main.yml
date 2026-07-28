@@ -1,0 +1,80 @@
+---
+# Step: teams — Microsoft Teams (unofficial teams-for-linux client).
+# The native Teams for Linux has been dead since 2022; MS officially offers
+# a PWA. teams-for-linux is an Electron wrapper around web-Teams with its
+# own apt repo: looks like a desktop app, updates together with the system.
+
+- name: Ensure the apt keyrings directory exists
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+
+- name: Download the teams-for-linux repo signing key
+  # force: false — an existing non-empty key is kept (same as the shell's
+  # `[ ! -s ]` guard). If the download fails, the rest of the step is skipped.
+  ansible.builtin.get_url:
+    url: https://repo.teamsforlinux.de/teams-for-linux.asc
+    dest: /etc/apt/keyrings/teams-for-linux.asc
+    mode: "0644"
+    force: false
+  register: teams_key
+  ignore_errors: true
+
+- name: Warn — key download failed, step skipped
+  ansible.builtin.debug:
+    msg: "WARNING: could not fetch the teams-for-linux signing key — skipping the teams step"
+  when: teams_key is failed
+
+- name: Install teams-for-linux and the desktop shortcut
+  when: teams_key is not failed
+  block:
+    - name: Add the teams-for-linux apt repository (deb822)
+      ansible.builtin.copy:
+        content: |
+          # managed by vps-provision (Ansible)
+          Types: deb
+          URIs: https://repo.teamsforlinux.de/debian/
+          Suites: stable
+          Components: main
+          Architectures: amd64
+          Signed-By: /etc/apt/keyrings/teams-for-linux.asc
+        dest: /etc/apt/sources.list.d/teams-for-linux.sources
+        mode: "0644"
+
+    - name: Install teams-for-linux (best effort)
+      ansible.builtin.apt:
+        name: teams-for-linux
+        state: present
+        update_cache: true
+      ignore_errors: true
+
+    - name: Check for the packaged .desktop file
+      ansible.builtin.stat:
+        path: /usr/share/applications/teams-for-linux.desktop
+      register: teams_desktop
+
+    - name: Warn — .desktop not found (package not installed?)
+      ansible.builtin.debug:
+        msg: "WARNING: teams-for-linux.desktop not found — did the package fail to install?"
+      when: not teams_desktop.stat.exists
+
+    - name: Put the Teams launcher on the work user's Desktop
+      when: teams_desktop.stat.exists
+      block:
+        - name: Ensure the Desktop directory exists
+          ansible.builtin.file:
+            path: "/home/{{ work_user }}/Desktop"
+            state: directory
+            owner: "{{ work_user }}"
+            group: "{{ work_user }}"
+            mode: "0755"
+
+        - name: Copy the packaged .desktop to the Desktop
+          ansible.builtin.copy:
+            src: /usr/share/applications/teams-for-linux.desktop
+            dest: "/home/{{ work_user }}/Desktop/teams-for-linux.desktop"
+            remote_src: true
+            owner: "{{ work_user }}"
+            group: "{{ work_user }}"
+            mode: "0755"

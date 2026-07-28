@@ -12,11 +12,13 @@
 
 - name: Install packages required for the Windows-10 look
   # xfce4-whiskermenu-plugin — the "Start" button
+  # xfce4-pulseaudio-plugin  — the volume control in the panel
   # gtk2-engines-murrine    — renders the GTK2 part of the B00merang theme
   # gvfs                    — Trash / removable media on the desktop
   ansible.builtin.apt:
     name:
       - xfce4-whiskermenu-plugin
+      - xfce4-pulseaudio-plugin
       - gtk2-engines-murrine
       - gvfs
       - gvfs-daemons

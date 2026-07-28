@@ -1,0 +1,9 @@
+---
+- name: Restart prometheus-node-exporter
+  # A failed restart is fine while the tunnel is down — the Restart=always
+  # drop-in retries the bind every 5s until wg0 has its address.
+  ansible.builtin.systemd_service:
+    name: prometheus-node-exporter
+    state: restarted
+    daemon_reload: true
+  failed_when: false

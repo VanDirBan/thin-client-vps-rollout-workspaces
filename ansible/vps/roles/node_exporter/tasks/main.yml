@@ -1,0 +1,119 @@
+---
+# Step: node_exporter — Prometheus metrics, reachable ONLY over wg0.
+# Binding to the concrete wg IP instead of 0.0.0.0 is the only protection
+# until a firewall exists: the port simply does not exist on the public IP.
+# The address is known from vars (wg_address) even if the tunnel is not up
+# yet: a drop-in with Restart=always keeps retrying the bind until wg0 gets
+# its address (same scheme as x11vnc/node_exporter on the laptops).
+
+- name: Skip note — node_exporter disabled
+  ansible.builtin.debug:
+    msg: "node_exporter is disabled (node_exporter_enable=false) — skipping"
+  when: not node_exporter_enable | bool
+
+- name: Configure node_exporter
+  when: node_exporter_enable | bool
+  block:
+    - name: Make sure wg_address is set (we need an IP to bind to)
+      ansible.builtin.assert:
+        that:
+          - (wg_address | default('') | length) > 0
+        fail_msg: "node_exporter: wg_address is empty — nothing to bind to"
+
+    - name: Derive the bind IP from wg_address
+      ansible.builtin.set_fact:
+        ne_wg_ip: "{{ wg_address.split('/') | first }}"
+
+    - name: Install prometheus-node-exporter (no recommends)
+      # --no-install-recommends: skip the *-collectors package (smartmon/apt
+      # cron jobs). On Ubuntu the package lives in universe — if that repo
+      # is disabled, enable it and retry.
+      ansible.builtin.apt:
+        name: prometheus-node-exporter
+        state: present
+        install_recommends: false
+      register: ne_install
+      ignore_errors: true
+
+    - name: Enable universe and retry (Ubuntu fallback)
+      when: ne_install is failed
+      block:
+        - name: Install software-properties-common (best effort)
+          ansible.builtin.apt:
+            name: software-properties-common
+            state: present
+          ignore_errors: true
+
+        - name: Enable the universe repository
+          ansible.builtin.command: add-apt-repository -y universe
+          changed_when: true
+          failed_when: false
+
+        - name: Install prometheus-node-exporter (retry, hard fail)
+          ansible.builtin.apt:
+            name: prometheus-node-exporter
+            state: present
+            install_recommends: false
+            update_cache: true
+
+    - name: Keep a one-time backup of the original defaults file
+      # Analogue of the shell's ensure_backup: a single .orig with the
+      # pristine state instead of timestamped copies on every run.
+      ansible.builtin.command: >-
+        cp -a /etc/default/prometheus-node-exporter
+              /etc/default/prometheus-node-exporter.orig
+      args:
+        creates: /etc/default/prometheus-node-exporter.orig
+      failed_when: false
+
+    - name: Bind node_exporter to the wg address only
+      ansible.builtin.copy:
+        content: |
+          # Managed by vps-provision (Ansible)
+          ARGS="--web.listen-address={{ ne_wg_ip }}:{{ node_exporter_port }}"
+        dest: /etc/default/prometheus-node-exporter
+        mode: "0644"
+      notify: Restart prometheus-node-exporter
+
+    - name: Create the systemd drop-in directory
+      ansible.builtin.file:
+        path: /etc/systemd/system/prometheus-node-exporter.service.d
+        state: directory
+        mode: "0755"
+
+    - name: Drop-in — endless bind retries until the tunnel is up
+      ansible.builtin.copy:
+        content: |
+          # Managed by vps-provision (Ansible): wg0 may come up after us on boot
+          [Unit]
+          StartLimitIntervalSec=0
+          [Service]
+          Restart=always
+          RestartSec=5
+        dest: /etc/systemd/system/prometheus-node-exporter.service.d/override.conf
+        mode: "0644"
+      notify: Restart prometheus-node-exporter
+
+    - name: Enable prometheus-node-exporter
+      ansible.builtin.systemd_service:
+        name: prometheus-node-exporter
+        enabled: true
+        daemon_reload: true
+      failed_when: false
+
+    - name: Make sure the service is at least started
+      # If the tunnel is not up yet, the start "fails" but the drop-in keeps
+      # retrying every 5s — the service comes up by itself after wg0.
+      ansible.builtin.systemd_service:
+        name: prometheus-node-exporter
+        state: started
+      register: ne_started
+      failed_when: false
+
+    - name: Note — waiting for wg0
+      ansible.builtin.debug:
+        msg: >-
+          node_exporter did not start (tunnel not up?) — it will come up by
+          itself after wg0. Check from the admin node:
+          curl http://{{ ne_wg_ip }}:{{ node_exporter_port }}/metrics
+      when: ne_started is failed

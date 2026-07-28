@@ -1,7 +1,9 @@
 # vps-provision (Ansible)
 
-Ansible port of `scripts/vps-provision.sh` v2.0 inside the larger department VPS/thin-client repository — initial provisioning of a work VPS:
-XFCE + NoMachine + Firefox + Multilogin X + Telegram + WireGuard (client).
+Ansible port of `scripts/vps-provision.sh` v2.3 inside the larger department VPS/thin-client repository — initial provisioning of a work VPS:
+XFCE + NoMachine + Firefox + Multilogin X + Telegram + Teams (teams-for-linux)
++ WireGuard (client) + audio tunnel to the paired thin client + node_exporter
+(wg-only) + no-lock/no-blank session.
 Users: `adams` (admin, sudo), `smm` (work, unprivileged).
 
 Push model: the playbook runs from the admin laptop over SSH.
@@ -20,8 +22,10 @@ pip install passlib                       # only if password_hash complains (Pyt
    cp group_vars/vps/vault.yml.example group_vars/vps/vault.yml
    ansible-vault encrypt group_vars/vps/vault.yml
    ```
-3. Add your VPS to `inventory/hosts.yml` (real public IP + its unique
-   `wg_address` from the selected tunnel range).
+3. Add your VPS to `inventory/hosts.yml`: public IP, its unique
+   `wg_address` from the 10.77.77.101-200 range, and `audio_laptop_ip` —
+   the wg address of the PAIRED laptop (10.77.77.6-99). Leave
+   `audio_laptop_ip` empty to skip the audio tunnel on that host.
 
 ## Running
 
@@ -60,7 +64,18 @@ The `preflight` role is tagged `always` and runs every time.
   use `ignore_errors` — one missing package on a given distro does not abort
   the run.
 * **NoMachine restart** happens exactly once, at the end of the `display`
-  step, after `node.cfg` and the display stack are in place.
+  step, after `node.cfg` and the display stack are in place. `node.cfg` gets
+  `AudioInterface disabled`: the NX audio channel is muted on purpose — all
+  sound goes through the separate PipeWire tunnel (`audio` role).
+* **Audio tunnel** (`audio` role): a user-level `audio-tunnel.service` in the
+  `smm` session keeps `module-tunnel-sink/source` pointed at the paired
+  laptop's PipeWire (`audio_laptop_ip:4713`) and re-creates them on breaks.
+  A "Restart sound" button lands on the desktop for manual recovery.
+* **node_exporter** (`node_exporter` role): binds ONLY to the wg address
+  from `wg_address`. Until wg0 is up the bind fails and systemd retries
+  every 5s (drop-in) — the service comes up by itself after the tunnel.
+* **nolock** (`nolock` role): purges screen lockers and disables
+  blanking/DPMS for the work session — a remote desktop must never lock.
 * **Not done by this playbook**: the firewall. NoMachine listens on port
   4000 on the public IP until you close it — connect via SSH tunnel or WG.
 
