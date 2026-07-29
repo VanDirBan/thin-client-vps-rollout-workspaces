@@ -1,14 +1,17 @@
 ---
-# vps-provision — Ansible port of vps-provision.sh v2.3
+# vps-provision Ansible v2.3.2 — port of vps-provision.sh v2.3
 #   XFCE + NoMachine + Firefox + MLX + Telegram + Teams + WireGuard (client)
 #   + audio tunnel to the thin client + node_exporter (wg-only) + no-lock
 #   Users: adams (admin), smm (work)
 #
-# Full run:
-#   ansible-playbook site.yml -k --ask-vault-pass
+# Full run (root passwords come from vault_root_pass):
+#   ansible-playbook site.yml --ask-vault-pass
 #
 # Selected steps (after a failure / to finish a single section):
-#   ansible-playbook site.yml --tags nomachine,display --ask-vault-pass
+#   ansible-playbook site.yml --ask-vault-pass --tags nomachine,display
+#
+# Dry run against a live reference machine:
+#   ansible-playbook site.yml --ask-vault-pass --check --diff --limit vps-199
 #
 # Roles run in playbook order regardless of how tags are listed on the
 # command line — same as the canonical STEPS order in the shell version.
@@ -26,6 +29,14 @@
     - name: Pre-check — required secrets and inventory values were replaced
       ansible.builtin.assert:
         that:
+          - >-
+            (ansible_user | default('root')) != 'root' or
+            (
+              (vault_root_pass | default({})) is mapping and
+              inventory_hostname in (vault_root_pass | default({})) and
+              ((vault_root_pass | default({})).get(inventory_hostname, '') | length) > 0 and
+              not ((vault_root_pass | default({})).get(inventory_hostname, '') is match('^CHANGE_ME_'))
+            )
           - vault_admin_pass | default('') | length > 0
           - vault_admin_pass | default('') != 'CHANGE_ME_STRONG_ADMIN_PASSWORD'
           - vault_work_pass | default('') | length > 0
@@ -39,9 +50,10 @@
              (wg_server_endpoint | default('') | length) > 0)
         fail_msg: >-
           Replace the public placeholders before running: copy
-          group_vars/vps/vault.yml.example to ignored vault.yml, set real
-          passwords there, update inventory/hosts.yml with a real VPS address,
-          and either leave both WireGuard server values empty or set both.
+          group_vars/vps/vault.yml.example to ignored vault.yml, set the
+          per-host root password plus real user passwords there, update
+          inventory/hosts.yml with a real VPS address, and either leave both
+          WireGuard server values empty or set both.
           Set audio_laptop_ip per host only when the paired thin client is ready.
       tags: [always]
 

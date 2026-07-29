@@ -92,7 +92,7 @@
     - name: Note — session not active
       ansible.builtin.debug:
         msg: "Session of {{ work_user }} is not active — the unit will start on the next login"
-      when: audio_start.rc != 0
+      when: (audio_start.rc | default(0)) != 0   # default(0): the command is skipped in --check
 
 - name: Disable and clean up the tunnel
   when: not audio_enabled

@@ -1,11 +1,19 @@
 ---
 # Main configuration — the only place you should need to edit.
-# Mirror of the CONFIG block from vps-provision.sh v2.3.
+# Mirror of the CONFIG block from vps-provision.sh v2.3 (Ansible v2.3.2).
 
 admin_user: adams
 work_user: smm
 
-# Actual passwords live in ignored vault.yml (copy from vault.yml.example and encrypt it with ansible-vault).
+# --- SSH connection: per-host root password from the vault ------------------
+# Evaluated lazily at connection time. A host missing from vault_root_pass
+# fails with a clear error — add its inventory hostname to vault.yml.
+# When a host is switched to key-based SSH as adams, override ansible_user and
+# ansible_password for that host in inventory/hosts.yml.
+ansible_password: "{{ (vault_root_pass | default({})).get(inventory_hostname, '') }}"
+
+# Actual passwords live in ignored vault.yml (copy from vault.yml.example and
+# encrypt it with ansible-vault).
 # Passwords are set ONLY on user creation — a re-run never rolls back a
 # password that was changed by hand after provisioning.
 admin_pass: "{{ vault_admin_pass }}"

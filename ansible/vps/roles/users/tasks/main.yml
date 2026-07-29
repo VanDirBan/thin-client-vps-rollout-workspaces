@@ -40,6 +40,7 @@
     owner: "{{ item }}"
     group: "{{ item }}"
     recurse: true
+    follow: false
   loop:
     - "{{ admin_user }}"
     - "{{ work_user }}"

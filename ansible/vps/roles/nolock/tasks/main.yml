@@ -37,12 +37,14 @@
   register: nolock_uid
   changed_when: false
   failed_when: false
+  check_mode: false   # read-only probe — must run in --check too
 
 - name: Check whether the work-user session is alive
   ansible.builtin.command: "pgrep -u {{ work_user }} xfce4-session"
   register: nolock_session
   changed_when: false
   failed_when: false
+  check_mode: false   # read-only probe — must run in --check too
 
 - name: Disable DPMS/blanking in the live session right away (best effort)
   # Via the session's DBus; otherwise the autostart entry applies it on the

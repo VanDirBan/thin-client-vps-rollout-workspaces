@@ -13,9 +13,20 @@
   register: mlx_installed
   changed_when: false
   failed_when: false
+  check_mode: false   # read-only probe — must run in --check too
+
+- name: Would install Multilogin X Desktop (check mode)
+  ansible.builtin.debug:
+    msg: "CHECK: would copy and install {{ mlx_deb_name }}"
+  changed_when: true
+  when:
+    - ansible_check_mode
+    - mlx_installed.rc != 0
 
 - name: Install Multilogin X Desktop
-  when: mlx_installed.rc != 0
+  when:
+    - not ansible_check_mode
+    - mlx_installed.rc != 0
   block:
     - name: Copy the .deb to the VPS
       # apt refuses to install from directories with foreign permissions —

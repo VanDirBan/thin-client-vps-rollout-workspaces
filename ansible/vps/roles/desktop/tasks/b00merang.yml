@@ -9,9 +9,22 @@
   register: b00_marker
   changed_when: false
   failed_when: false
+  check_mode: false   # read-only probe — must run in --check too
+
+- name: "{{ b00.target }} — would install pinned commit (check mode)"
+  # The install block below uses tempfile.path, which does not exist in
+  # --check (tempfile is skipped) — so in check mode we only report intent.
+  ansible.builtin.debug:
+    msg: "CHECK: would (re)install B00merang {{ b00.repo }} at commit {{ b00.commit }}"
+  changed_when: true
+  when:
+    - ansible_check_mode
+    - (b00_marker.stdout | default('') | trim) != b00.commit
 
 - name: "{{ b00.target }} — install pinned commit"
-  when: (b00_marker.stdout | default('') | trim) != b00.commit
+  when:
+    - not ansible_check_mode
+    - (b00_marker.stdout | default('') | trim) != b00.commit
   block:
     - name: Create a temporary work directory
       ansible.builtin.tempfile:

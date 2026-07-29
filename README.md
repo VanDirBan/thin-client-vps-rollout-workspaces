@@ -36,7 +36,7 @@ cd ansible/vps
 ansible-galaxy collection install -r requirements.yml
 cp group_vars/vps/vault.yml.example group_vars/vps/vault.yml
 ansible-vault encrypt group_vars/vps/vault.yml
-ansible-playbook site.yml -k --ask-vault-pass --check --diff --limit vps-199
+ansible-playbook site.yml --ask-vault-pass --check --diff --limit vps-199
 ```
 
 Typical first commands for the thin-client path:
@@ -157,7 +157,7 @@ ansible-playbook site.yml -K --ask-vault-pass --check --diff --limit tc-05
 
 ### `ansible/vps/`
 
-Ansible migration slice for VPS desktop provisioning, currently aligned with the v2.3 `scripts/vps-provision.sh` flow.
+Ansible migration slice for VPS desktop provisioning, currently at v2.3.2 and aligned with the v2.3 `scripts/vps-provision.sh` flow.
 
 It maps the bash flow into roles:
 

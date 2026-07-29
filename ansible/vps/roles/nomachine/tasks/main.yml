@@ -17,9 +17,21 @@
   register: nx_installed
   changed_when: false
   failed_when: false
+  check_mode: false   # read-only probe — must run in --check too
+
+- name: Would install NoMachine {{ nomachine_version }} (check mode)
+  # The block below relies on tempfile.path — unavailable in --check.
+  ansible.builtin.debug:
+    msg: "CHECK: would download and install NoMachine {{ nomachine_version }}"
+  changed_when: true
+  when:
+    - ansible_check_mode
+    - nx_installed.rc != 0
 
 - name: Download and install NoMachine {{ nomachine_version }}
-  when: nx_installed.rc != 0
+  when:
+    - not ansible_check_mode
+    - nx_installed.rc != 0
   block:
     - name: Create a temporary file for the .deb
       ansible.builtin.tempfile:

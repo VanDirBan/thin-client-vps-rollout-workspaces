@@ -9,6 +9,7 @@
         -maxdepth 1 -iname "*{{ app }}*.desktop" -print -quit 2>/dev/null || true
   register: app_src
   changed_when: false
+  check_mode: false   # read-only probe — must run in --check too
 
 - name: "{{ app }} — warn if no .desktop was found"
   ansible.builtin.debug:

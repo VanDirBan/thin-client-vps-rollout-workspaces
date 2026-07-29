@@ -1,16 +1,24 @@
 ---
 # Step: telegram — distro repo first, Flatpak (Flathub) fallback.
 # (Ubuntu 24.04 has no telegram-desktop in its repositories.)
+- name: Check whether the distro has a telegram-desktop candidate
+  ansible.builtin.command: apt-cache policy telegram-desktop
+  register: telegram_apt_policy
+  changed_when: false
+  check_mode: false
 
 - name: Install telegram-desktop from the distro repository
   ansible.builtin.apt:
     name: telegram-desktop
     state: present
-  register: tg_apt
+  when:
+    - "'Candidate:' in telegram_apt_policy.stdout"
+    - "'Candidate: (none)' not in telegram_apt_policy.stdout"
+  register: telegram_apt_result
   ignore_errors: true
 
 - name: Install Telegram as a Flatpak (fallback)
-  when: tg_apt is failed
+  when: telegram_apt_result is skipped or telegram_apt_result is failed
   block:
     - name: Install flatpak
       ansible.builtin.apt:

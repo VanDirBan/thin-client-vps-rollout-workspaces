@@ -1,6 +1,6 @@
 # vps-provision (Ansible)
 
-Ansible port of `scripts/vps-provision.sh` v2.3 inside the larger department VPS/thin-client repository — initial provisioning of a work VPS:
+Ansible release v2.3.2, based on `scripts/vps-provision.sh` v2.3 inside the larger department VPS/thin-client repository — initial provisioning of a work VPS:
 XFCE + NoMachine + Firefox + Multilogin X + Telegram + Teams (teams-for-linux)
 + WireGuard (client) + audio tunnel to the paired thin client + node_exporter
 (wg-only) + no-lock/no-blank session.
@@ -11,13 +11,15 @@ Push model: the playbook runs from the admin laptop over SSH.
 ## One-time setup on the admin laptop
 
 ```bash
-sudo apt install ansible sshpass          # sshpass is needed for -k (password SSH)
+sudo apt install ansible sshpass          # sshpass is needed for password SSH
 ansible-galaxy collection install -r requirements.yml
 pip install passlib                       # only if password_hash complains (Python 3.13+)
 ```
 
 1. Put `desktop-multiloginx-ubuntu-24.04-amd64.deb` into `roles/mlx/files/` locally. The `.deb` is intentionally ignored and not committed.
-2. Create a real local Vault file from the committed template. The real `vault.yml` is ignored by git:
+2. Create a real local Vault file from the committed template. Fill the
+   per-host root passwords in `vault_root_pass` and the two user passwords.
+   The real `vault.yml` is ignored by git:
    ```bash
    cp group_vars/vps/vault.yml.example group_vars/vps/vault.yml
    ansible-vault encrypt group_vars/vps/vault.yml
@@ -29,18 +31,35 @@ pip install passlib                       # only if password_hash complains (Pyt
 
 ## Running
 
-Full run on a fresh VPS (root + SSH password):
+Full run on a fresh VPS. The root password is selected from
+`vault_root_pass` by inventory hostname, so no `-k` prompt is needed:
 
 ```bash
-ansible-playbook site.yml -k --ask-vault-pass
+ansible-playbook site.yml --ask-vault-pass
 ```
 
 Selected steps (after a failure / to finish one section — the analogue of
 `sudo bash vps-provision.sh nomachine display`):
 
 ```bash
-ansible-playbook site.yml -k --ask-vault-pass --tags nomachine,display
+ansible-playbook site.yml --ask-vault-pass --tags nomachine,display
 ```
+
+## Dry run (`--check`) against a live reference machine
+
+A no-op audit of an already-provisioned VPS:
+
+```bash
+ansible-playbook site.yml --ask-vault-pass --check --diff --limit vps-199
+```
+
+Read-only probes run during check mode because later conditionals need their
+results. Package/full-upgrade drift and the unconditional display restart can
+still be reported as changes. Install blocks that need temporary files do not
+run in check mode; they print an explicit `CHECK: would install ...` message.
+
+On a real re-run, the `display` role restarts LightDM and NoMachine and ends
+the active GUI session. Use `--skip-tags display` unless that restart is needed.
 
 List all steps/tags:
 
@@ -58,8 +77,8 @@ The `preflight` role is tagged `always` and runs every time.
   a re-run never rolls back manually changed passwords.
 * **WireGuard**: the key pair is always generated; `wg0.conf` is written and
   the tunnel started only when `wg_server_pubkey` and `wg_server_endpoint`
-  are filled in `group_vars/vps/vars.yml`. Public repository defaults keep them empty. The public key is printed by the
-  `wireguard` and `summary` steps — add it as a peer on the pfSense WG server.
+  are filled in `group_vars/vps/vars.yml`. Public repository defaults keep
+  them empty. The public key is printed by the `wireguard` and `summary` steps — add it as a peer on the pfSense WG server.
 * **Best-effort packages** (goodies, sound, fallback themes, guest agent)
   use `ignore_errors` — one missing package on a given distro does not abort
   the run.
@@ -83,4 +102,5 @@ The `preflight` role is tagged `always` and runs every time.
 
 Once WireGuard is up you can switch the inventory to the tunnel address
 (`ansible_host: 10.77.77.x`) and/or key-based SSH as `adams` with
-`become`, and stop using `-k`.
+`become`. Override `ansible_user`/`ansible_password` for that host and remove
+its no-longer-needed entry from `vault_root_pass`.

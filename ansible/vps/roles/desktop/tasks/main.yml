@@ -58,9 +58,3 @@
     name: [pipewire, pipewire-pulse, wireplumber]
     state: present
   ignore_errors: true
-
-- name: Install xfce4-screensaver (only needed if Win+L must actually lock)
-  ansible.builtin.apt:
-    name: xfce4-screensaver
-    state: present
-  ignore_errors: true

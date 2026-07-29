@@ -6,6 +6,7 @@
   register: sum_pub
   changed_when: false
   failed_when: false
+  check_mode: false   # read-only probe — must run in --check too
 
 - name: Check whether wg0.conf exists
   ansible.builtin.stat:

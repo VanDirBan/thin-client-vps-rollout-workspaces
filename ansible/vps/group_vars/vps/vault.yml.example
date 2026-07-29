@@ -4,5 +4,8 @@
 #   cp group_vars/vps/vault.yml.example group_vars/vps/vault.yml
 #   ansible-vault encrypt group_vars/vps/vault.yml
 # From then on every run needs --ask-vault-pass (or --vault-password-file).
+vault_root_pass:
+  vps-199: "CHANGE_ME_ROOT_PASSWORD_FOR_VPS_199"
+
 vault_admin_pass: "CHANGE_ME_STRONG_ADMIN_PASSWORD"
 vault_work_pass: "CHANGE_ME_STRONG_WORK_PASSWORD"
