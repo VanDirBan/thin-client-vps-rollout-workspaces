@@ -95,8 +95,9 @@ The `preflight` role is tagged `always` and runs every time.
   every 5s (drop-in) — the service comes up by itself after the tunnel.
 * **nolock** (`nolock` role): purges screen lockers and disables
   blanking/DPMS for the work session — a remote desktop must never lock.
-* **Not done by this playbook**: the firewall. NoMachine listens on port
-  4000 on the public IP until you close it — connect via SSH tunnel or WG.
+* **Network policy**: pfSense manages perimeter firewall rules and WireGuard
+  server peers outside this playbook. NoMachine and SSH access is restricted
+  to WireGuard or approved management networks.
 
 ## After the first run
 

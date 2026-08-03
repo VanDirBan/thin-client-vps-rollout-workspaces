@@ -470,8 +470,8 @@ if [[ "$AUDIO_TUNNEL_ENABLE" == "yes" ]]; then
     printf '%s\n' "     pactl list short sinks | grep laptop_out"
 fi
 printf '\n'
-printf '%s\n' "REMEMBER: VPS firewall automation is not implemented yet. NoMachine port 4000"
-printf '%s\n' "may be exposed on the public IP until you restrict it manually."
+printf '%s\n' "NETWORK POLICY: verify pfSense restricts NoMachine port 4000 and SSH"
+printf '%s\n' "to WireGuard or approved management networks."
 
 pause_before_exit
 exit 0

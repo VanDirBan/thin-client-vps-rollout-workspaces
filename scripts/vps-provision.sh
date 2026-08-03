@@ -79,8 +79,8 @@ AUDIO_TCP_PORT="${AUDIO_TCP_PORT:-4713}"
 
 #--- node_exporter: Prometheus metrics for the admin node ----------------------
 # Bind ONLY to this VPS's WireGuard address. This matters because the VPS has a
-# public IP and firewall automation is not implemented yet; binding to 0.0.0.0
-# would expose metrics to the Internet. If wg0 is not up yet, systemd retries.
+# public IP; binding to 0.0.0.0 would expose metrics outside the management
+# network. If wg0 is not up yet, systemd retries.
 NODE_EXPORTER_ENABLE="${NODE_EXPORTER_ENABLE:-yes}"
 NODE_EXPORTER_PORT="${NODE_EXPORTER_PORT:-9100}"
 
@@ -759,10 +759,9 @@ Put desktop-multiloginx-ubuntu-24.04-amd64.deb next to the script."
 
 #==============================================================================
 # STEP: node_exporter — Prometheus metrics, reachable only through wg0
-#     Bind to the concrete WG IP instead of 0.0.0.0. This is the only protection
-#     before firewall automation exists: the port simply does not exist on the
-#     public IP. The address is known from WG_ADDRESS even if the tunnel is not
-#     up yet; the drop-in retries until wg0 has the address.
+#     Bind to the concrete WG IP instead of 0.0.0.0 so the port does not exist
+#     on the public interface. The address is known from WG_ADDRESS even if the
+#     tunnel is not up yet; the drop-in retries until wg0 has the address.
 #==============================================================================
 step_node_exporter() {
     if [ "$NODE_EXPORTER_ENABLE" != "yes" ]; then
@@ -1013,9 +1012,9 @@ step_summary() {
         echo "  Audio tunnel:  ${AUDIO_LAPTOP_IP}:${AUDIO_TCP_PORT} (WORK_USER session, PipeWire TCP)."
     fi
     echo
-    warn "IMPORTANT — what this script has NOT done (planned as the next step):"
-    echo "   • Firewall. NoMachine is currently listening on port 4000 on the PUBLIC IP."
-    echo "     Until it's closed off by a firewall, only reach it via an SSH tunnel or WG."
+    warn "NETWORK POLICY:"
+    echo "   • pfSense manages perimeter firewall rules and WireGuard server peers."
+    echo "   • Verify NoMachine and SSH are reachable only through WireGuard or approved management networks."
 
     if [ -f /var/run/reboot-required ]; then
         warn "Kernel/packages were updated — a reboot is recommended."

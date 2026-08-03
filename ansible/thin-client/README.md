@@ -1,6 +1,6 @@
 # thin-client-ansible
 
-A migration of `local-provision.sh` v2.4.1 to Ansible. Push model: the playbook runs from the admin laptop and configures thin clients over SSH. A single run can provision the whole fleet in parallel.
+Ansible implementation of `local-provision.sh` v2.4.1. Push model: the playbook runs from the admin laptop and configures thin clients over SSH. A single run can provision the whole fleet in parallel.
 
 ## How this maps to the bash script
 

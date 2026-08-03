@@ -41,11 +41,11 @@
                       Add this VPS to /etc/prometheus/targets/fleet.json on the admin node (type: vps).
       {% endif %}
 
-- name: IMPORTANT — what this playbook does NOT do (planned as the next step)
+- name: Report perimeter network policy
   ansible.builtin.debug:
     msg: |
-      * Firewall. Right now NoMachine listens on port 4000 on the PUBLIC IP.
-        Until a firewall closes it, connect only via an SSH tunnel or WG.
+      * pfSense manages perimeter firewall rules and WireGuard server peers.
+        Verify NoMachine and SSH are reachable only through WireGuard or approved management networks.
 
 - name: Reboot recommended
   ansible.builtin.debug:

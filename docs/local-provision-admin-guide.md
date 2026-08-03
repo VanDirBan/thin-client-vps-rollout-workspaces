@@ -194,7 +194,7 @@ Because this is a full-tunnel WireGuard design, do the next steps while physical
 
 ## 8. Recovery notes
 
-If internet disappears after boot, the full-tunnel peer probably was not configured server-side yet:
+If internet disappears after boot, verify that the full-tunnel server-side peer exists and matches the client configuration:
 
 ```bash
 sudo systemctl disable --now wg-quick@wg0 wg-watchdog.timer

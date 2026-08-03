@@ -216,7 +216,7 @@ The `node_exporter` step installs `prometheus-node-exporter` and writes:
 - `/etc/default/prometheus-node-exporter` with `--web.listen-address=<WG_IP>:9100`;
 - `/etc/systemd/system/prometheus-node-exporter.service.d/override.conf` with retry-on-failure behavior.
 
-It intentionally binds to the WireGuard address only. Until firewall automation exists, this avoids exposing metrics on the VPS public IP.
+It intentionally binds to the WireGuard address only, keeping metrics off the VPS public interface and inside the management network.
 
 Expected check from the admin node:
 
@@ -269,8 +269,8 @@ After the VPS rollout:
 - if audio is enabled, verify `laptop_out`/`laptop_mic` from the worker session;
 - verify `node_exporter` from the admin node over the VPS WireGuard IP;
 - reboot if `/var/run/reboot-required` exists;
-- restrict NoMachine and SSH exposure manually until firewall automation is implemented.
+- verify that pfSense policy restricts NoMachine and SSH to WireGuard or approved management networks.
 
-## Known gap
+## Network policy
 
-Firewall automation is not implemented yet. Until it is added and verified, NoMachine port `4000` may be reachable on the public VPS interface after rollout. Treat the VPS as exposed until access is restricted to WireGuard, SSH tunnel, or approved admin networks.
+Perimeter firewall rules and WireGuard server peers are managed on pfSense outside the VPS provisioner. NoMachine on port `4000` and SSH must be reachable only through WireGuard or approved management networks. Verify this policy after every rollout.

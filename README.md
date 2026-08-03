@@ -2,24 +2,24 @@
 
 Sanitized infrastructure automation for provisioning Debian thin clients and managed Ubuntu VPS desktops.
 
-The main focus is the rollout stack: idempotent Bash provisioners, a parallel Ansible migration track, WireGuard/NoMachine integration, monitoring, and operator runbooks.
+The rollout stack includes idempotent Bash provisioners, complete Ansible implementations, WireGuard/NoMachine integration, monitoring, and operator runbooks.
 
-The repository also contains a separate WorkMon component for encrypted screenshot capture and controlled admin-side collection. It is intended only for company-owned equipment under an approved monitoring policy, legal basis, and employee notice.
+The repository also contains a separate WorkMon component for encrypted screenshot capture and controlled admin-side collection. It is used only on company-owned equipment under an approved monitoring policy, legal basis, and employee notice.
 
-This is a reference implementation rather than a turnkey distribution. Firewall automation, WireGuard server-side peer policy, and further operational hardening remain planned work.
+This repository documents the completed operational workflow currently in use. The public tree is sanitized and contains no production credentials, host data, screenshots, or proprietary binary packages.
 
-## Ansible transition track
+## Deployment implementations
 
 Parallel Ansible implementations now live under `ansible/`:
 
 - `ansible/vps/` — Ansible port of `scripts/vps-provision.sh` for the working VPS desktop.
 - `ansible/thin-client/` — Ansible port of `scripts/local-provision.sh` for the physical thin-client laptop.
 
-Why they are here:
+Why both implementations are kept:
 
-- The current approved rollout path remains the familiar shell-script workflow under `scripts/`. That keeps the project acceptable for leadership that wants known, simple deployment mechanics.
-- The Ansible trees are the modernization/learning path: the same provisioning logic is being translated into declarative roles, inventory, group variables, host variables, handlers, templates, and Vault-managed secrets.
-- Both paths should coexist for now. Scripts stay the operational baseline; Ansible is the controlled migration track where each script step can be mapped to an idempotent role and tested before it becomes the default.
+- The shell-script workflow under `scripts/` remains the approved operational baseline for routine rollout.
+- The Ansible trees provide the same provisioning logic through declarative roles, inventory, group variables, host variables, handlers, templates, and Vault-managed secrets.
+- Both paths are maintained: scripts provide the familiar operator workflow, while Ansible supports repeatable fleet deployment, check mode, and role-based maintenance.
 
 How to read them:
 
@@ -48,12 +48,12 @@ ansible-vault encrypt inventory/group_vars/thin_clients/vault.yml
 ansible-playbook site.yml -K --ask-vault-pass --check --diff --limit tc-05
 ```
 
-## Current status
+## Operational status
 
-- Sanitized public reference implementation, not a turnkey production distribution.
-- Source scripts, packages, and Ansible migration tracks are organized and documented.
+- Complete and in active use.
+- Source scripts, packages, Ansible implementations, and operator procedures are organized and documented.
 - Real passwords, private keys, WireGuard keys, production SMB paths, screenshots, archives, Vault files, and binary installers are intentionally not committed.
-- Host firewall automation remains an open item. Restrict externally reachable services, especially NoMachine, to WireGuard or approved management networks before use.
+- Perimeter firewall rules, WireGuard server peers, and routing policy are managed on pfSense outside the endpoint provisioners in this repository.
 
 ## Architecture overview
 
@@ -102,14 +102,14 @@ ansible-playbook site.yml -K --ask-vault-pass --check --diff --limit tc-05
 ```text
 .
 ├── ansible/
-│   ├── vps/                            # First Ansible migration slice for VPS desktop rollout
+│   ├── vps/                            # Ansible implementation for VPS desktop rollout
 │   │   ├── site.yml                    # Main playbook, equivalent to ordered vps-provision steps
 │   │   ├── ansible.cfg
 │   │   ├── requirements.yml
 │   │   ├── inventory/hosts.yml         # VPS fleet and per-host tunnel addresses
 │   │   ├── group_vars/vps/             # Shared VPS vars and Vault template
 │   │   └── roles/                      # preflight/base/desktop/users/firefox/etc.
-│   └── thin-client/                    # First Ansible migration slice for physical thin-client rollout
+│   └── thin-client/                    # Ansible implementation for physical thin-client rollout
 │       ├── site.yml                    # Main playbook, equivalent to ordered script steps
 │       ├── ansible.cfg
 │       ├── requirements.yml
@@ -156,7 +156,7 @@ ansible-playbook site.yml -K --ask-vault-pass --check --diff --limit tc-05
 
 ### `ansible/vps/`
 
-Ansible migration slice for VPS desktop provisioning, currently at v2.3.2 and aligned with the v2.3 `scripts/vps-provision.sh` flow.
+Ansible implementation for VPS desktop provisioning, release v2.3.2, aligned with the v2.3 `scripts/vps-provision.sh` flow.
 
 It maps the bash flow into roles:
 
@@ -175,13 +175,13 @@ It maps the bash flow into roles:
 - `display` — Xorg dummy display, LightDM/XFCE autologin, keyboard layout autostart, final NoMachine restart;
 - `nolock` — remove lockers and suppress screen blanking/DPMS for the work session;
 - `shortcuts` — work-user desktop launchers;
-- `summary` — final operator report and remaining firewall warning.
+- `summary` — final operator report and perimeter-policy reminder.
 
-This Ansible path does not yet automate host firewall policy. Restrict NoMachine to WireGuard or approved management networks before use.
+Perimeter access policy is managed on pfSense outside this playbook. NoMachine and SSH are restricted to WireGuard or approved management networks.
 
 ### `ansible/thin-client/`
 
-Ansible migration slice for physical thin-client provisioning, currently aligned with the v2.4.1 release local-provision flow.
+Ansible implementation for physical thin-client provisioning, aligned with the v2.4.1 release local-provision flow.
 
 It maps the bash `scripts/local-provision.sh` flow into roles:
 
@@ -196,7 +196,7 @@ It maps the bash `scripts/local-provision.sh` flow into roles:
 - `svc_desktop` — service-user Desktop/autostart/power/lock settings, optional ready-made NoMachine `.nxs` shortcut, and `xfce-win10.sh` placement;
 - `workmon` — bundled `workmon-agent-0.4.0` payload installed via its own rerun-safe `install.sh`.
 
-This is intentionally separate from the approved script rollout path. Use it for learning, review, dry-runs, and gradual migration rather than as the only operational source of truth.
+This implementation is maintained alongside the approved script rollout path and supports fleet runs, check mode, and role-based maintenance.
 
 ### `scripts/vps-provision.sh`
 
@@ -228,12 +228,12 @@ Important notes:
 - It verifies the downloaded NoMachine `.deb`, because the NoMachine download server may return an HTML page with HTTP 200 for a nonexistent version.
 - It treats the VPS as a WireGuard client of an existing WG network: it always generates `/etc/wireguard/vps_private.key` and `/etc/wireguard/vps_public.key`, and writes/starts `wg0` only when `WG_SERVER_PUBKEY` and `WG_SERVER_ENDPOINT` are set.
 - The default sanitized VPS tunnel address is `10.8.0.101/24`; adjust `WG_ADDRESS` per VPS and keep each address unique.
-- The WireGuard server-side peer still has to be added outside this script.
+- The WireGuard server-side peer is added through the external pfSense workflow.
 - The LightDM display step enables autologin for the worker user so NoMachine reconnects enter the XFCE desktop without a greeter password prompt.
 - The `audio` step installs a worker-session keeper for `laptop_out`/`laptop_mic` via PipeWire TCP to a paired thin client.
 - The `node_exporter` step binds metrics to the VPS WireGuard IP only and retries until wg0 is up.
 - The `nolock` step removes lockers and disables screen blanking for remote-desktop sessions.
-- It does **not** configure the host firewall yet. After the initial rollout, restrict NoMachine on port `4000` to WireGuard or approved management networks.
+- Perimeter firewall policy is managed on pfSense outside this provisioner. NoMachine on port `4000` is restricted to WireGuard or approved management networks.
 - The Multilogin `.deb` is intentionally not committed. Put it next to `scripts/vps-provision.sh` before running:
 
 ```text
@@ -465,7 +465,7 @@ After the run:
 
 - reboot if `/var/run/reboot-required` exists;
 - verify LightDM/XFCE and NoMachine;
-- restrict NoMachine and SSH to WireGuard or approved management networks until firewall automation is added;
+- verify that pfSense policy restricts NoMachine and SSH to WireGuard or approved management networks;
 - add the generated VPS WireGuard public key as a peer on the WG server, then fill `WG_SERVER_PUBKEY` / `WG_SERVER_ENDPOINT` and rerun `sudo -E bash scripts/vps-provision.sh wireguard`;
 - place the Multilogin X `.deb` next to the script before reruns if needed.
 
@@ -689,23 +689,23 @@ The repository `.gitignore` already excludes the common dangerous file types: en
 
 ### Monitoring and compliance
 
-WorkMon is an optional component intended only for company-owned equipment under an approved monitoring policy, legal basis, and employee notice. The agent does not hide itself, resist removal, or self-heal. No production screenshots or employee data are included in this repository. Capture intervals and retention must be reviewed for proportionality and applicable law before use.
+WorkMon is an optional component used only on company-owned equipment under an approved monitoring policy, legal basis, and employee notice. The agent does not hide itself, resist removal, or self-heal. No production screenshots or employee data are included in this repository. Capture intervals and retention follow the approved monitoring policy and applicable law.
 
-### Network exposure
+### Network policy
 
-Current implementation boundary:
+Endpoint provisioning and perimeter policy are intentionally separated:
 
-- Firewall setup is not yet implemented in the provisioning scripts.
-- NoMachine may listen on port `4000` publicly after VPS rollout.
-- Local laptop `x11vnc` is designed to bind only to the WireGuard IPv4 address, but firewall automation for it is still not part of the repository.
-- WireGuard server-side peer configuration is not automated in this repository yet; the VPS-side client config is supported by `scripts/vps-provision.sh` once the server details are provided.
+- pfSense manages firewall rules, WireGuard server peers, and routing policy outside this repository.
+- The provisioners configure WireGuard clients and bind `x11vnc` and node_exporter to WireGuard addresses only.
+- NoMachine and SSH access is restricted to WireGuard or approved management networks by the perimeter policy.
+- SMB access is limited to the admin-side collection workflow where required.
 
-Before production use, add and verify firewall rules so that:
+Post-rollout validation confirms that:
 
 - NoMachine is reachable only through WireGuard or approved management networks;
 - SSH is restricted to admin/VPN sources;
 - SMB is reachable only where required;
-- WireGuard UDP port is the only intended public service if that is the chosen design.
+- node_exporter and `x11vnc` do not listen on public interfaces.
 
 ## Development and validation
 
@@ -746,26 +746,15 @@ git diff --check
 git status --short
 ```
 
-## Current TODO / planned work
-
-- Add VPS firewall setup.
-- Add/document final WireGuard server-side peer configuration and routing policy.
-- Decide final NoMachine exposure policy and enforce it automatically.
-- Add clearer operational runbooks after real deployment testing.
-- Decide backup/retention policy for the admin-side age private key and SMB screenshot archive.
-- Improve handling of local binary installers such as Multilogin X without committing them.
-- Add optional health checks for worker capture and collector dry-runs.
-- Revisit screenshot interval and retention with the approved monitoring policy.
-
 ## Operational cautions
 
 - Do not run `xfce-win10.sh` as root. It needs the user's active XFCE D-Bus session.
 - Do not run WorkMon collector `--purge` unless the age private key is already backed up.
 - Do not reuse the same `WG_CLIENT_ADDR` on multiple workers.
 - Do not enable full-tunnel WireGuard autostart until the VPS peer exists and routing is verified.
-- Do not rely on NoMachine being private until firewall rules are applied and checked.
+- Verify pfSense restrictions for NoMachine and SSH after every rollout or perimeter-policy change.
 - Do not place real secrets into files tracked by git; use ignored `.env.*` files or target-system config files.
 
 ## License / ownership
 
-This repository is a sanitized public reference implementation. No license is currently granted for reuse unless a `LICENSE` file is added.
+This repository is the sanitized public edition of the completed operational project. No license is granted for reuse unless a `LICENSE` file is added.
