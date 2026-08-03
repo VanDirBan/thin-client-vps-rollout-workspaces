@@ -1,13 +1,12 @@
 # Department VPS Workflows
 
-Work-in-progress infrastructure repository for moving one department's daily work from local physical laptops to managed VPS desktops.
+Sanitized infrastructure automation for provisioning Debian thin clients and managed Ubuntu VPS desktops.
 
-The project has two connected parts:
+The main focus is the rollout stack: idempotent Bash provisioners, a parallel Ansible migration track, WireGuard/NoMachine integration, monitoring, and operator runbooks.
 
-1. **VPS/thin-client workplace migration** — a physical laptop becomes a managed thin client that connects to a working VPS desktop.
-2. **WorkMon screenshot collection** — the worker laptop captures screenshots locally, encrypts them immediately, and the admin laptop later pulls, decrypts, and uploads them to an SMB share.
+The repository also contains a separate WorkMon component for encrypted screenshot capture and controlled admin-side collection. It is intended only for company-owned equipment under an approved monitoring policy, legal basis, and employee notice.
 
-This repository is currently the baseline implementation. It is expected to evolve: firewall setup, WireGuard server-side peer policy, operational polish, and extra automation are still planned.
+This is a reference implementation rather than a turnkey distribution. Firewall automation, WireGuard server-side peer policy, and further operational hardening remain planned work.
 
 ## Ansible transition track
 
@@ -51,10 +50,10 @@ ansible-playbook site.yml -K --ask-vault-pass --check --diff --limit tc-05
 
 ## Current status
 
-- Development-stage project, not a finished production distribution.
-- Source scripts, packages, and the first Ansible migration slices are imported, organized, and sanitized.
+- Sanitized public reference implementation, not a turnkey production distribution.
+- Source scripts, packages, and Ansible migration tracks are organized and documented.
 - Real passwords, private keys, WireGuard keys, production SMB paths, screenshots, archives, Vault files, and binary installers are intentionally not committed.
-- Full firewall hardening is not implemented yet. Until it is added, treat externally reachable services, especially NoMachine, as requiring manual network restriction.
+- Host firewall automation remains an open item. Restrict externally reachable services, especially NoMachine, to WireGuard or approved management networks before use.
 
 ## Architecture overview
 
@@ -178,7 +177,7 @@ It maps the bash flow into roles:
 - `shortcuts` — work-user desktop launchers;
 - `summary` — final operator report and remaining firewall warning.
 
-This Ansible path still keeps the same major operational gap as the script path: firewall policy is not configured yet, so public NoMachine exposure must be closed manually until the next hardening step is added.
+This Ansible path does not yet automate host firewall policy. Restrict NoMachine to WireGuard or approved management networks before use.
 
 ### `ansible/thin-client/`
 
@@ -234,7 +233,7 @@ Important notes:
 - The `audio` step installs a worker-session keeper for `laptop_out`/`laptop_mic` via PipeWire TCP to a paired thin client.
 - The `node_exporter` step binds metrics to the VPS WireGuard IP only and retries until wg0 is up.
 - The `nolock` step removes lockers and disables screen blanking for remote-desktop sessions.
-- It does **not** configure the firewall yet. After the first rollout, NoMachine may listen on port `4000` on the public interface until you close it manually.
+- It does **not** configure the host firewall yet. After the initial rollout, restrict NoMachine on port `4000` to WireGuard or approved management networks.
 - The Multilogin `.deb` is intentionally not committed. Put it next to `scripts/vps-provision.sh` before running:
 
 ```text
@@ -466,7 +465,7 @@ After the run:
 
 - reboot if `/var/run/reboot-required` exists;
 - verify LightDM/XFCE and NoMachine;
-- manually restrict public access until firewall automation is added;
+- restrict NoMachine and SSH to WireGuard or approved management networks until firewall automation is added;
 - add the generated VPS WireGuard public key as a peer on the WG server, then fill `WG_SERVER_PUBKEY` / `WG_SERVER_ENDPOINT` and rerun `sudo -E bash scripts/vps-provision.sh wireguard`;
 - place the Multilogin X `.deb` next to the script before reruns if needed.
 
@@ -690,11 +689,11 @@ The repository `.gitignore` already excludes the common dangerous file types: en
 
 ### Monitoring and compliance
 
-This project is intended for company-owned equipment under an approved monitoring policy, legal basis, and employee notice. The WorkMon agent does not hide itself, resist removal, or self-heal. Screenshot interval defaults are dense and should be reviewed for proportionality, retention, and applicable law before production use.
+WorkMon is an optional component intended only for company-owned equipment under an approved monitoring policy, legal basis, and employee notice. The agent does not hide itself, resist removal, or self-heal. No production screenshots or employee data are included in this repository. Capture intervals and retention must be reviewed for proportionality and applicable law before use.
 
 ### Network exposure
 
-Current known gap:
+Current implementation boundary:
 
 - Firewall setup is not yet implemented in the provisioning scripts.
 - NoMachine may listen on port `4000` publicly after VPS rollout.
@@ -769,4 +768,4 @@ git status --short
 
 ## License / ownership
 
-Internal project repository. Add a formal license or internal-use notice before sharing outside the intended environment.
+This repository is a sanitized public reference implementation. No license is currently granted for reuse unless a `LICENSE` file is added.
